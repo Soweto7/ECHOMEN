@@ -1,6 +1,7 @@
 import { FunctionDeclaration, Type, GenerateContentResponse } from "@google/genai";
 import type { Task, AgentRole, ToolCall, AgentPreferences, TodoItem, SubStep, Playbook, CustomAgent, Artifact } from '../types';
 import { availableTools, toolDeclarations } from './tools';
+import { auth } from "./firebase";
 
 const structuredPlanSchema = {
     type: Type.ARRAY,
@@ -80,10 +81,18 @@ const handleApiResponse = (response: GenerateContentResponse, onTokenUpdate: (co
 }
 
 const generateContentProxy = async (model: string, contents: any, config?: any): Promise<GenerateContentResponse> => {
+    const user = auth.currentUser;
+    if (!user) {
+        throw new Error("User not authenticated");
+    }
+
+    const token = await user.getIdToken();
+
     const response = await fetch('http://localhost:3001/api/proxy', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({ model, contents, config }),
     });
