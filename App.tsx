@@ -13,8 +13,11 @@ import { ExecutionStatusBar } from './components/ExecutionStatusBar';
 import { AgentExecutor } from './services/agentExecutor';
 import { ArtifactsPanel } from './components/ArtifactsPanel';
 import { PlaybookCreationModal } from './components/PlaybookCreationModal';
+import { useAuth } from './contexts/AuthContext';
+import { Login } from './components/Login';
 
 const App: React.FC = () => {
+    const { currentUser } = useAuth();
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [isHistoryOpen, setIsHistoryOpen] = useState(false);
     const [isArtifactsOpen, setIsArtifactsOpen] = useState(false);
@@ -289,6 +292,10 @@ const App: React.FC = () => {
         ease: "anticipate",
         duration: 0.5,
     };
+
+    if (!currentUser) {
+        return <Login />;
+    }
 
     return (
         <div className="bg-zinc-100 dark:bg-[#0A0A0A] text-zinc-900 dark:text-gray-200 min-h-screen font-sans flex flex-col">

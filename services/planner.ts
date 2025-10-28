@@ -1,6 +1,7 @@
-import { GoogleGenAI, FunctionDeclaration, Type, Chat, GenerateContentResponse } from "@google/genai";
+import { FunctionDeclaration, Type, GenerateContentResponse } from "@google/genai";
 import type { Task, AgentRole, ToolCall, AgentPreferences, TodoItem, SubStep, Playbook, CustomAgent, Artifact } from '../types';
 import { availableTools, toolDeclarations } from './tools';
+import { auth } from "./firebase";
 
 const structuredPlanSchema = {
     type: Type.ARRAY,
@@ -10,8 +11,8 @@ const structuredPlanSchema = {
         properties: {
             title: { type: Type.STRING, description: "A short, descriptive title for the task." },
             details: { type: Type.STRING, description: "A detailed description of what this task entails." },
-            agentRole: { 
-                type: Type.STRING, 
+            agentRole: {
+                type: Type.STRING,
                 description: "The role of the agent best suited for this task.",
                 enum: ['Planner', 'Executor', 'Reviewer', 'Synthesizer']
             },
@@ -23,20 +24,17 @@ const structuredPlanSchema = {
 const actionAnalysisSchema = {
     type: Type.OBJECT,
     properties: {
-        is_actionable: { 
-            type: Type.BOOLEAN, 
-            description: "True if the user's message is a command or request to perform a task, false otherwise." 
+        is_actionable: {
+            type: Type.BOOLEAN,
+            description: "True if the user's message is a command or request to perform a task, false otherwise."
         },
-        suggested_prompt: { 
-            type: Type.STRING, 
-            description: "If actionable, a refined and clear version of the user's command. Otherwise, an empty string." 
+        suggested_prompt: {
+            type: Type.STRING,
+            description: "If actionable, a refined and clear version of the user's command. Otherwise, an empty string."
         }
     },
     required: ["is_actionable", "suggested_prompt"]
 };
-
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-let chat: Chat | null = null;
 
 const WELCOME_TRIGGERS = ['what can you do', 'help', 'explain yourself', 'what is this', 'hello', 'hi', 'what are you', 'who are you'];
 
@@ -79,7 +77,31 @@ const handleApiResponse = (response: GenerateContentResponse, onTokenUpdate: (co
     if (response.usageMetadata?.totalTokenCount) {
         onTokenUpdate(response.usageMetadata.totalTokenCount);
     }
-    return response.text;
+    return response.response.candidates[0].content.parts[0].text;
+}
+
+const generateContentProxy = async (model: string, contents: any, config?: any): Promise<GenerateContentResponse> => {
+    const user = auth.currentUser;
+    if (!user) {
+        throw new Error("User not authenticated");
+    }
+
+    const token = await user.getIdToken();
+
+    const response = await fetch('http://localhost:3001/api/proxy', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ model, contents, config }),
+    });
+
+    if (!response.ok) {
+        throw new Error('Failed to fetch from proxy');
+    }
+
+    return response.json();
 }
 
 export const analyzeChatMessageForAction = async (prompt: string, onTokenUpdate: (count: number) => void): Promise<{ is_actionable: boolean; suggested_prompt: string }> => {
@@ -89,14 +111,10 @@ export const analyzeChatMessageForAction = async (prompt: string, onTokenUpdate:
 Your response MUST be a valid JSON object adhering to the provided schema.`;
 
     try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: actionAnalysisSchema,
-                systemInstruction: systemInstruction,
-            },
+        const response = await generateContentProxy('gemini-2.5-flash', [{ role: 'user', parts: [{ text: prompt }] }], {
+            responseMimeType: "application/json",
+            responseSchema: actionAnalysisSchema,
+            systemInstruction: systemInstruction,
         });
         const resultJson = handleApiResponse(response, onTokenUpdate).trim();
         const result = JSON.parse(resultJson);
@@ -119,13 +137,9 @@ User: "make a new react component called header"
 Assistant: "Create a new React component named 'Header'. It should have a default export and a basic JSX structure."
 `;
     try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt,
-            config: {
-                systemInstruction: systemInstruction,
-                temperature: 0.2, // Be conservative with changes
-            },
+        const response = await generateContentProxy('gemini-2.5-flash', [{ role: 'user', parts: [{ text: prompt }] }], {
+            systemInstruction: systemInstruction,
+            temperature: 0.2, // Be conservative with changes
         });
         return handleApiResponse(response, onTokenUpdate).trim();
     } catch (error) {
@@ -152,7 +166,7 @@ const findRelevantPlaybook = async (prompt: string, playbooks: Playbook[], onTok
     if (playbooks.length === 0) return null;
 
     const playbookDescriptions = playbooks.map(p => `ID: ${p.id}, Description: ${p.triggerPrompt}`).join('\n');
-    
+
     const recallPrompt = `
 User Prompt: "${prompt}"
 
@@ -164,12 +178,9 @@ If none are a good match, respond with "NONE".
 Available Playbooks:
 ${playbookDescriptions}
 `;
-    
+
     try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: recallPrompt,
-        });
+        const response = await generateContentProxy('gemini-2.5-flash', [{ role: 'user', parts: [{ text: recallPrompt }] }]);
 
         const bestId = handleApiResponse(response, onTokenUpdate).trim();
         if (bestId && bestId !== 'NONE') {
@@ -178,7 +189,7 @@ ${playbookDescriptions}
     } catch (error) {
         console.error("Error finding relevant playbook:", error);
     }
-    
+
     return null;
 }
 
@@ -232,9 +243,9 @@ export const createInitialPlan = async (
             return rehydrateTasksFromPlaybook(relevantPlaybook, agentPreferences);
         }
     }
-    
+
     let systemInstruction = "You are a world-class autonomous agent planner. Your job is to receive a user request and break it down into a sequence of logical tasks. A typical sequence is: 1. Planner (for outlining/structuring), 2. Executor (for performing the work), 3. Reviewer (for checking quality), and 4. Synthesizer (for final assembly). Keep tasks high-level. The Executor agent will handle the detailed, step-by-step tool usage. Respond with a JSON array of tasks that adheres to the provided schema.";
-    
+
     let contextPreamble = `
 [SYSTEM CONTEXT]
 - Connected Services: ${context.connectedServices.length > 0 ? context.connectedServices.join(', ') : 'None'}
@@ -252,16 +263,12 @@ This context is for your awareness. Use it to create a more effective and inform
     }
 
     try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: structuredPlanSchema,
-                systemInstruction: systemInstruction,
-            },
+        const response = await generateContentProxy('gemini-2.5-flash', [{ role: 'user', parts: [{ text: prompt }] }], {
+            responseMimeType: "application/json",
+            responseSchema: structuredPlanSchema,
+            systemInstruction: systemInstruction,
         });
-        
+
         const textResponse = handleApiResponse(response, onTokenUpdate);
 
         if (!textResponse || !textResponse.trim()) {
@@ -281,7 +288,7 @@ This context is for your awareness. Use it to create a more effective and inform
                 const taskId = `task-gen-${Date.now()}-${index}`;
                 let agentRole: AgentRole = p.agentRole || 'Executor';
                 let agentName = getAgentNameForRole(agentRole, agentPreferences);
-                
+
                 if (isWebToolActive && agentRole === 'Executor') {
                     agentName = 'WebHawk';
                 }
@@ -321,10 +328,10 @@ This context is for your awareness. Use it to create a more effective and inform
 
 
 export const determineNextStep = async (task: Task, subSteps: SubStep[], currentArtifacts: Artifact[], onTokenUpdate: (count: number) => void): Promise<{ thought: string; toolCall: ToolCall } | { isFinished: true; finalThought: string }> => {
-    const history = subSteps.map(step => 
+    const history = subSteps.map(step =>
         `Thought: ${step.thought}\nAction: ${JSON.stringify(step.toolCall)}\nObservation: ${step.observation}`
     ).join('\n\n');
-    
+
     const artifactList = currentArtifacts.map(a => `- ${a.title} (${a.type})`).join('\n');
 
     const prompt = `
@@ -337,7 +344,7 @@ You have access to the following tools: ${toolDeclarations.map(t => t.name).join
 - Artifacts created so far:
 ${artifactList.length > 0 ? artifactList : "None"}
 
-Based on the history of your previous actions and observations, decide on the very next step. 
+Based on the history of your previous actions and observations, decide on the very next step.
 You must think step-by-step and then choose one single tool to use.
 When you have a final result, like a block of code or a document, use the 'createArtifact' tool to save it.
 Do not guess or assume information; use tools like 'listFiles' or 'readFile' to get the facts.
@@ -350,15 +357,11 @@ ${history || "No actions taken yet."}
 What is your next action?
 `;
 
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-            responseMimeType: "application/json",
-            systemInstruction: "You are a methodical AI agent executor. Follow the ReAct (Reason-Act) pattern. Your response must be a single, valid JSON object representing your next thought and action, or a finalization signal.",
-        },
+    const response = await generateContentProxy('gemini-2.5-flash', [{ role: 'user', parts: [{ text: prompt }] }], {
+        responseMimeType: "application/json",
+        systemInstruction: "You are a methodical AI agent executor. Follow the ReAct (Reason-Act) pattern. Your response must be a single, valid JSON object representing your next thought and action, or a finalization signal.",
     });
-    
+
     const resultJson = handleApiResponse(response, onTokenUpdate).trim();
 
     try {
@@ -387,16 +390,10 @@ export const getChatResponse = async (prompt: string, onTokenUpdate: (count: num
         return ECHO_EXPLANATION;
     }
 
-    if (!chat) {
-        chat = ai.chats.create({
-            model: 'gemini-2.5-flash',
-            config: {
-                systemInstruction: 'You are ECHO, a helpful AI assistant. You are direct, efficient, and concise in your responses.',
-            },
-        });
-    }
     try {
-        const response = await chat.sendMessage({ message: prompt });
+        const response = await generateContentProxy('gemini-2.5-flash', [{ role: 'user', parts: [{ text: prompt }] }], {
+            systemInstruction: 'You are ECHO, a helpful AI assistant. You are direct, efficient, and concise in your responses.',
+        });
         return handleApiResponse(response, onTokenUpdate);
     } catch (error) {
         console.error("Error getting chat response:", error);
@@ -410,7 +407,7 @@ export const getChatResponse = async (prompt: string, onTokenUpdate: (count: num
 
 export const suggestPlaybookName = async (prompt: string, tasks: Task[], onTokenUpdate: (count: number) => void): Promise<string> => {
     const taskSummary = tasks.map((t, i) => `${i + 1}. [${t.agent.role}] ${t.title}`).join('\n');
-    
+
     const summarizationPrompt = `
 Original User Prompt: "${prompt}"
 
@@ -421,10 +418,7 @@ Based on the original prompt and the successful plan, create a short, descriptiv
 `;
 
     try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: summarizationPrompt,
-        });
+        const response = await generateContentProxy('gemini-2.5-flash', [{ role: 'user', parts: [{ text: summarizationPrompt }] }]);
 
         return handleApiResponse(response, onTokenUpdate).trim().replace(/"/g, '');
     } catch (error) {

@@ -6,6 +6,8 @@ import { ArchiveBoxIcon } from './icons/ArchiveBoxIcon';
 import { Task, AgentStatus, SessionStats } from '../types';
 import { SystemStatusIndicator } from './SystemStatusIndicator';
 import { TokenUsageIndicator } from './TokenUsageIndicator';
+import { useAuth } from '../contexts/AuthContext';
+import { auth } from '../services/firebase';
 
 interface HeaderProps {
     onSettingsClick: () => void;
@@ -17,6 +19,12 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({ onSettingsClick, onHistoryClick, onArtifactsClick, tasks, agentStatus, sessionStats }) => {
+    const { currentUser } = useAuth();
+
+    const handleLogout = async () => {
+        await auth.signOut();
+    };
+
     return (
         <header className="fixed top-0 left-0 right-0 bg-white/80 dark:bg-[#0A0A0A]/80 backdrop-blur-lg border-b border-black/10 dark:border-white/10 p-4 flex justify-between items-center z-50">
             <div className="flex items-center gap-3">
@@ -39,8 +47,9 @@ export const Header: React.FC<HeaderProps> = ({ onSettingsClick, onHistoryClick,
                  <SystemStatusIndicator tasks={tasks} agentStatus={agentStatus} />
                  <div className="h-6 w-px bg-black/20 dark:bg-white/20"></div>
                  <TokenUsageIndicator stats={sessionStats} />
+                <button onClick={handleLogout} className="text-sm text-gray-500 hover:text-black dark:hover:text-white">Logout</button>
                 <img
-                    src="https://picsum.photos/100/100"
+                    src={currentUser?.photoURL || ''}
                     alt="User Avatar"
                     className="w-9 h-9 rounded-full border-2 border-cyan-600/50 dark:border-[#00D4FF]/50"
                 />
