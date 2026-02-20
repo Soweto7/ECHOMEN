@@ -55,24 +55,35 @@ ECHO runs entirely in your browser. To get started locally:
     cd echo-agent
     ```
 
-2.  **Set up your API Key:**
+2.  **Set up your environment variables:**
     -   Create a `.env` file in the project root.
-    -   Add your Google AI Studio API key:
+    -   Add your Google AI Studio API key and (optionally) your tool backend URL:
         ```
-        API_KEY=your_google_api_key_here
+        VITE_GEMINI_API_KEY=your_google_api_key_here
+        VITE_TOOL_BACKEND_URL=http://localhost:3001
         ```
 
-3.  **Install dependencies and run:**
-    This project is configured to run with a simple static server.
+3.  **Install dependencies and run the frontend:**
     ```bash
-    # If you have Python 3
-    python -m http.server
-
-    # Or with Node.js
-    npx serve
+    npm install
+    npm run dev
     ```
 
-4.  Open your browser to the local server address (e.g., `http://localhost:8000`).
+4.  **Run the tool backend (required for real file/shell/web tools):**
+    -   Start your ECHO Execution Engine on `http://localhost:3001`.
+    -   The frontend calls `VITE_TOOL_BACKEND_URL/execute-tool` for tool execution.
+
+5.  Open your browser to the local server address shown by Vite (typically `http://localhost:3000`).
+
+
+### 🔌 Model Provider Flexibility
+
+ECHO now uses the first **enabled** model provider from Settings (`echo-model-providers`) for planning/chat flows.
+- `GEMINI` providers use the native Google SDK.
+- `OLLAMA` providers support the `/api/generate` endpoint.
+- Other providers can be used through OpenAI-compatible `.../chat/completions` endpoints.
+
+For frontend-exposed keys, prefer `VITE_` env vars (for example `VITE_GEMINI_API_KEY`, `VITE_HF_API_KEY`).
 
 ## 🛠️ Technology Stack
 
