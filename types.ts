@@ -171,3 +171,44 @@ export interface ModelProviderConfig {
   integration_layer: 'NATIVE' | 'LANGCHAIN';
   enabled: boolean;
 }
+
+export type SkillPermissionScope = 'filesystem' | 'shell' | 'network' | 'external_api';
+
+export interface SkillManifest {
+  name: string;
+  version: string;
+  capabilities: string[];
+  required_tools: string[];
+  prompts: string[];
+  provenance: 'core' | 'third_party';
+  enabled_by_default: boolean;
+  signature?: {
+    algorithm: 'simple-hash';
+    value: string;
+  };
+  policies: {
+    permissions: {
+      filesystem: boolean;
+      shell: boolean;
+      network: boolean;
+      external_api: boolean;
+      external_apis: string[];
+    };
+  };
+}
+
+export interface SkillRuntimeContext {
+  manifests: SkillManifest[];
+  enabledSkills: SkillManifest[];
+  selectedByCapability: Record<string, string>;
+  capabilityAssignments: Record<string, string>;
+}
+
+export interface SkillTelemetryEvent {
+  timestamp: string;
+  prompt: string;
+  skills: string[];
+  completed: boolean;
+  latencyMs: number;
+  tokenCost: number;
+}

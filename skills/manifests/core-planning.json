@@ -1,0 +1,21 @@
+{
+  "name": "Core Planning Skill",
+  "version": "1.0.0",
+  "capabilities": ["planning", "filesystem"],
+  "required_tools": ["listFiles", "readFile", "writeFile"],
+  "prompts": [
+    "Prioritize safe planning and deterministic execution.",
+    "Use existing artifacts before creating new files."
+  ],
+  "provenance": "core",
+  "enabled_by_default": true,
+  "policies": {
+    "permissions": {
+      "filesystem": true,
+      "shell": false,
+      "network": false,
+      "external_api": false,
+      "external_apis": []
+    }
+  }
+}

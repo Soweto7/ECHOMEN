@@ -14,7 +14,7 @@ import { SupabaseIcon } from './icons/SupabaseIcon';
 import { GenericApiIcon } from './icons/GenericApiIcon';
 import { AgentCreationModal } from './AgentCreationModal';
 // FIX: Added Service to the import from the central types file.
-import { CustomAgent, Playbook, AgentPreferences, AgentRole, TodoItem, Service, ModelProviderConfig } from '../types';
+import { CustomAgent, Playbook, AgentPreferences, AgentRole, TodoItem, Service, ModelProviderConfig, SkillManifest } from '../types';
 import { PencilIcon } from './icons/PencilIcon';
 import { TrashIcon } from './icons/TrashIcon';
 import { PlusIcon } from './icons/PlusIcon';
@@ -42,6 +42,8 @@ import { CodeSandboxIcon } from './icons/CodeSandboxIcon';
 import { ServerIcon } from './icons/ServerIcon';
 // FIX: Import missing ChevronDownIcon.
 import { ChevronDownIcon } from './icons/ChevronDownIcon';
+import { getSkillRuntimeContext, persistSkillSettings, resolveCapabilityConflicts } from '../services/skills';
+import { getSkillTelemetrySummary } from '../services/skillTelemetry';
 
 
 interface MasterConfigurationPanelProps {
@@ -241,6 +243,10 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
     const [copiedPromptId, setCopiedPromptId] = useState<string | null>(null);
     const [isModelModalOpen, setIsModelModalOpen] = useState(false);
     const [editingModel, setEditingModel] = useState<ModelProviderConfig | null>(null);
+    const [skills, setSkills] = useState<SkillManifest[]>([]);
+    const [enabledSkills, setEnabledSkills] = useState<Record<string, boolean>>({});
+    const [selectedByCapability, setSelectedByCapability] = useState<Record<string, string>>({});
+
 
     const [modelProviders, setModelProviders] = useState<ModelProviderConfig[]>(() => {
         try {
@@ -312,6 +318,18 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
     }, []);
 
     useEffect(() => {
+        const runtime = getSkillRuntimeContext();
+        setSkills(runtime.manifests);
+        setSelectedByCapability(runtime.selectedByCapability);
+        setEnabledSkills(Object.fromEntries(runtime.manifests.map((skill) => [skill.name, runtime.enabledSkills.some((enabled) => enabled.name === skill.name)])));
+    }, []);
+
+    useEffect(() => {
+        if (skills.length === 0) return;
+        persistSkillSettings(enabledSkills, selectedByCapability);
+    }, [skills, enabledSkills, selectedByCapability]);
+
+    useEffect(() => {
         try {
             localStorage.setItem('echo-agent-preferences', JSON.stringify(agentPreferences));
         } catch (error) {
@@ -355,6 +373,23 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
         const customAgentNames = agents.filter(a => !a.isCore).map(a => a.name);
         return [...new Set([...defaultAgentModels, ...customAgentNames])];
     }, [agents]);
+
+    const skillConflicts = useMemo(() => {
+        const enabled = skills.filter((skill) => enabledSkills[skill.name]);
+        const capabilityMap = new Map<string, SkillManifest[]>();
+        enabled.forEach((skill) => {
+            skill.capabilities.forEach((capability) => {
+                const list = capabilityMap.get(capability) || [];
+                list.push(skill);
+                capabilityMap.set(capability, list);
+            });
+        });
+        return Array.from(capabilityMap.entries()).filter(([, list]) => list.length > 1);
+    }, [skills, enabledSkills]);
+
+    const resolvedCapabilities = useMemo(() => resolveCapabilityConflicts(skills.filter((skill) => enabledSkills[skill.name]), selectedByCapability), [skills, enabledSkills, selectedByCapability]);
+
+    const skillTelemetry = useMemo(() => getSkillTelemetrySummary(), []);
 
     const categorizedServices = useMemo(() => {
         const categories: Record<string, Service[]> = {
@@ -422,6 +457,14 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
 
     const handleToggleAgent = (agentId: string) => {
         setAgents(prev => prev.map(a => a.id === agentId ? { ...a, enabled: !a.enabled } : a));
+    };
+
+    const handleToggleSkill = (skillName: string) => {
+        setEnabledSkills((prev) => ({ ...prev, [skillName]: !(prev[skillName] ?? false) }));
+    };
+
+    const handleResolveCapability = (capability: string, skillName: string) => {
+        setSelectedByCapability((prev) => ({ ...prev, [capability]: skillName }));
     };
     
     const handlePreferenceChange = (role: AgentRole, agentName: string) => {
@@ -763,6 +806,43 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
                                 </div>
                             </Section>
                         ))}
+
+                        <Section title="Skills" icon={<BrainIcon className="w-5 h-5" />}>
+                            <div className="space-y-3">
+                                {skills.map((skill) => (
+                                    <div key={skill.name} className="bg-black/5 dark:bg-white/5 p-3 rounded-lg">
+                                        <div className="flex items-center justify-between gap-3">
+                                            <div>
+                                                <p className="font-semibold text-zinc-800 dark:text-white">{skill.name} <span className="text-xs text-gray-500">v{skill.version}</span></p>
+                                                <p className="text-xs text-gray-600 dark:text-gray-400">{skill.provenance === 'core' ? 'Core' : 'Third-party'} · Caps: {skill.capabilities.join(', ')}</p>
+                                            </div>
+                                            <button onClick={() => handleToggleSkill(skill.name)} className={`text-xs font-semibold px-3 py-1 rounded ${enabledSkills[skill.name] ? 'bg-cyan-600 text-white' : 'bg-black/10 dark:bg-white/10 text-zinc-700 dark:text-zinc-200'}`}>
+                                                {enabledSkills[skill.name] ? 'Enabled' : 'Disabled'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+
+                                {skillConflicts.map(([capability, conflictSkills]) => (
+                                    <div key={capability} className="bg-amber-500/10 border border-amber-500/30 p-3 rounded-lg">
+                                        <p className="text-xs font-semibold text-amber-400 mb-2">Conflict: {capability}</p>
+                                        <select
+                                            value={selectedByCapability[capability] || resolvedCapabilities[capability] || conflictSkills[0].name}
+                                            onChange={(e) => handleResolveCapability(capability, e.target.value)}
+                                            className="w-full bg-black/10 dark:bg-white/10 rounded p-2 text-sm"
+                                        >
+                                            {conflictSkills.map((skill) => (
+                                                <option key={skill.name} value={skill.name}>{skill.name}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                ))}
+
+                                <div className="text-xs text-gray-600 dark:text-gray-400 bg-black/5 dark:bg-white/5 rounded-lg p-3">
+                                    Telemetry: {skillTelemetry.totalRuns} runs · completion {(skillTelemetry.completionRate * 100).toFixed(1)}% · avg latency {skillTelemetry.avgLatencyMs}ms · avg tokens {skillTelemetry.avgTokenCost}
+                                </div>
+                            </div>
+                        </Section>
 
                         <Section title="Advanced Workflows" icon={<GithubIcon className="w-5 h-5" />}>
                             <div className="space-y-3">
