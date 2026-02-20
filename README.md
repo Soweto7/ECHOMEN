@@ -3,7 +3,7 @@
 
 <img src="https://files.manuscdn.com/user_upload_by_module/session_file/310419663029321070/NVvajgOUYjfhzUHU.png" alt="ECHO - Autonomous AI Agent Logo" width="600"/>
 
-**Your thoughts. My echo. Infinite possibility.**
+**ECHO turns a plain-English app idea into a deployment-ready build plan, code scaffold, and launch checklist in one guided run.**
 
 </div>
 
@@ -19,11 +19,13 @@
 
 ---
 
-**ECHO** is not just another AI chatbot. It's a browser-based autonomous agent designed to transform natural language commands into executed reality. It plans, acts, and delivers results with ruthless efficiency, orchestrating a team of specialized AI agents to achieve complex goals.
+**ECHO** is a browser-based execution copilot focused on one v1 outcome: turning your product idea into a launch-ready implementation package.
 
-## Core Philosophy
+## v1 Product Promise
 
-The principle behind ECHO is simple: **Action over conversation.** While chat is a tool, the ultimate goal is execution. ECHO is designed with a persistent, stateful architecture that allows it to:
+**ECHO turns a plain-English app idea into a deployment-ready build plan, code scaffold, and launch checklist in one guided run.**
+
+The principle behind ECHO is simple: **Action over conversation.** ECHO is designed to:
 
 -   **Deconstruct** high-level objectives into actionable task pipelines.
 -   **Orchestrate** a multi-agent system, assigning the right agent to the right task.
@@ -42,7 +44,6 @@ The principle behind ECHO is simple: **Action over conversation.** While chat is
 -   📝 **Agent To-Do List:** Provide ECHO with high-priority objectives. The Planner uses this list as context to generate more relevant and aligned execution plans.
 -   📚 **Playbook Synthesis:** ECHO learns from its successes. Completed task plans are summarized into "Playbooks" that can be instantly recalled for similar future requests.
 -   ⚙️ **Master Configuration Panel (MCP):** A centralized hub to manage system instructions, connect services (e.g., GitHub, OpenAI), and create custom agents.
--   ↔️ **Dual Modes:** Switch seamlessly between `Action Mode` for task execution and `Chat Mode` for quick questions and brainstorming.
 -   🖥️ **Live Terminal:** Monitor the agent's every thought, action, and observation in a familiar terminal interface.
 
 ## 🚀 Getting Started
