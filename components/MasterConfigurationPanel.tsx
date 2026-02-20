@@ -386,15 +386,19 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
     const [isAgentModalOpen, setIsAgentModalOpen] = useState(false);
     const [editingAgent, setEditingAgent] = useState<CustomAgent | null>(null);
 
+    const logServiceAuthEvent = (event: string, metadata: Record<string, string | number | boolean>) => {
+        console.log(`[service-auth] ${event}`, metadata);
+    };
+
     const handleSaveService = (serviceId: string, values: { [key: string]: string }) => {
-        console.log(`Saving service ${serviceId}`, values);
+        logServiceAuthEvent('save-service', { serviceId, fieldCount: Object.keys(values).length });
         // Here you would typically encrypt and save the credentials
         setServices(prev => prev.map(s => s.id === serviceId ? { ...s, status: 'Connected' } : s));
         setSelectedService(null);
     };
     
     const handleDisconnectService = (serviceId: string) => {
-        console.log(`Disconnecting service ${serviceId}`);
+        logServiceAuthEvent('disconnect-service', { serviceId });
         setServices(prev => prev.map(s => s.id === serviceId ? { ...s, status: 'Not Connected' } : s));
         setSelectedService(null);
     };
