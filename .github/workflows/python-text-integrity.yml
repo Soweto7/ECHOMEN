@@ -1,0 +1,15 @@
+name: Python Text Integrity
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  check-python-text:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Python files are UTF-8 text
+        run: python3 scripts/check_python_text.py
