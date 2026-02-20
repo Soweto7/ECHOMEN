@@ -4,7 +4,7 @@ import { CommandCenter } from './components/CommandCenter';
 import { ExecutionDashboard } from './components/ExecutionDashboard';
 import { MasterConfigurationPanel } from './components/MasterConfigurationPanel';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Task, LogEntry, AgentMode, AgentStatus, Artifact, CustomAgent, Service, Playbook, TodoItem, SessionStats } from './types';
+import { Task, LogEntry, AgentMode, AgentStatus, Artifact, CustomAgent, Service, Playbook, TodoItem, SessionStats, ExperienceMode, UXMetrics } from './types';
 import { createInitialPlan, getChatResponse, suggestPlaybookName, clarifyAndCorrectPrompt, analyzeChatMessageForAction } from './services/planner';
 import { useMemory } from './hooks/useMemory';
 import { ChatInterface } from './components/ChatInterface';
@@ -13,6 +13,15 @@ import { ExecutionStatusBar } from './components/ExecutionStatusBar';
 import { AgentExecutor } from './services/agentExecutor';
 import { ArtifactsPanel } from './components/ArtifactsPanel';
 import { PlaybookCreationModal } from './components/PlaybookCreationModal';
+
+
+const defaultUXMetrics: UXMetrics = {
+    runsStarted: 0,
+    runsCompleted: 0,
+    runsAbandoned: 0,
+    shares: 0,
+    lastDropOffTask: null,
+};
 
 const App: React.FC = () => {
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -31,8 +40,19 @@ const App: React.FC = () => {
     const [commandCenterInput, setCommandCenterInput] = useState<string>('');
     const [sessionStats, setSessionStats] = useState<SessionStats>({ totalTokensUsed: 0 });
     const [playbookCandidate, setPlaybookCandidate] = useState<{ suggestedName: string; tasks: Task[]; triggerPrompt: string } | null>(null);
+    const [experienceMode, setExperienceMode] = useState<ExperienceMode>('SERIOUS');
+    const [uxMetrics, setUxMetrics] = useState<UXMetrics>(() => {
+        try {
+            const stored = localStorage.getItem('echo-ux-metrics');
+            return stored ? { ...defaultUXMetrics, ...JSON.parse(stored) } : defaultUXMetrics;
+        } catch {
+            return defaultUXMetrics;
+        }
+    });
+    const [latestArtifactId, setLatestArtifactId] = useState<string | null>(null);
 
     const executorRef = useRef<AgentExecutor | null>(null);
+    const hasActiveRunRef = useRef(false);
 
     useEffect(() => {
         if (theme === 'dark') {
@@ -41,6 +61,11 @@ const App: React.FC = () => {
             document.documentElement.classList.remove('dark');
         }
     }, [theme]);
+
+
+    useEffect(() => {
+        localStorage.setItem('echo-ux-metrics', JSON.stringify(uxMetrics));
+    }, [uxMetrics]);
     
     const handleSuggestionClick = (prompt: string) => {
         setCommandCenterInput(prompt);
@@ -71,6 +96,8 @@ const App: React.FC = () => {
             createdAt: new Date().toISOString(),
         };
         setArtifacts(prev => [...prev, newArtifact]);
+        setLatestArtifactId(newArtifact.id);
+        setIsArtifactsOpen(true);
         addLog({ status: 'SUCCESS', message: `[Executor] New artifact created: "${artifactData.title}"` });
     };
 
@@ -145,6 +172,8 @@ const App: React.FC = () => {
         setArtifacts([]);
         setCurrentPrompt(prompt);
         setAgentStatus(AgentStatus.RUNNING);
+        hasActiveRunRef.current = true;
+        setUxMetrics(prev => ({ ...prev, runsStarted: prev.runsStarted + 1 }));
 
         addLog({ status: 'INFO', message: `User command received: "${prompt}"` });
 
@@ -194,10 +223,15 @@ const App: React.FC = () => {
                 onAgentCreated: handleAgentCreated,
                 onFinish: () => {
                     addLog({ status: 'SUCCESS', message: 'ECHO: All tasks completed successfully.' });
+                    hasActiveRunRef.current = false;
+                    setUxMetrics(prev => ({ ...prev, runsCompleted: prev.runsCompleted + 1, lastDropOffTask: null }));
                     setAgentStatus(AgentStatus.FINISHED);
                 },
                 onFail: (errorMessage) => {
                     addLog({ status: 'ERROR', message: `ECHO: Execution failed. ${errorMessage}` });
+                    hasActiveRunRef.current = false;
+                    const activeTask = tasks.find(task => task.status === 'Executing')?.title || tasks.find(task => task.status !== 'Done')?.title || null;
+                    setUxMetrics(prev => ({ ...prev, runsAbandoned: prev.runsAbandoned + 1, lastDropOffTask: activeTask }));
                     setAgentStatus(AgentStatus.ERROR);
                 }
             });
@@ -208,6 +242,9 @@ const App: React.FC = () => {
             console.error("Error during agent execution:", error);
             const errorMessage = error instanceof Error ? error.message : String(error);
             addLog({ status: 'ERROR', message: `[System] A critical error occurred: ${errorMessage}` });
+            hasActiveRunRef.current = false;
+            const activeTask = tasks.find(task => task.status === 'Executing')?.title || tasks.find(task => task.status !== 'Done')?.title || null;
+            setUxMetrics(prev => ({ ...prev, runsAbandoned: prev.runsAbandoned + 1, lastDropOffTask: activeTask }));
             setAgentStatus(AgentStatus.ERROR);
         }
     };
@@ -275,6 +312,11 @@ const App: React.FC = () => {
             executorRef.current.stop();
         }
         addLog({ status: 'WARN', message: 'User initiated stop command. Halting all tasks.' });
+        if (hasActiveRunRef.current) {
+            const activeTask = tasks.find(task => task.status === 'Executing')?.title || tasks.find(task => task.status !== 'Done')?.title || null;
+            setUxMetrics(prev => ({ ...prev, runsAbandoned: prev.runsAbandoned + 1, lastDropOffTask: activeTask }));
+            hasActiveRunRef.current = false;
+        }
         setAgentStatus(AgentStatus.IDLE);
     };
 
@@ -299,6 +341,9 @@ const App: React.FC = () => {
                 tasks={tasks}
                 agentStatus={agentStatus}
                 sessionStats={sessionStats}
+                experienceMode={experienceMode}
+                onExperienceModeChange={setExperienceMode}
+                uxMetrics={uxMetrics}
             />
             
             <main className="flex-grow pt-24 pb-48 md:pb-40 flex flex-col">
@@ -317,6 +362,8 @@ const App: React.FC = () => {
                                 tasks={tasks}
                                 liveLogs={liveLogs}
                                 onCancelTask={handleCancelTask}
+                                currentPrompt={currentPrompt}
+                                agentStatus={agentStatus}
                             />
                         </motion.div>
                     ) : (
@@ -343,7 +390,7 @@ const App: React.FC = () => {
 
             <AnimatePresence>
                 {agentMode === AgentMode.ACTION && tasks.length > 0 && (
-                    <ExecutionStatusBar tasks={tasks} agentStatus={agentStatus} onStopExecution={handleStopExecution} />
+                    <ExecutionStatusBar tasks={tasks} agentStatus={agentStatus} onStopExecution={handleStopExecution} experienceMode={experienceMode} />
                 )}
             </AnimatePresence>
 
@@ -388,6 +435,8 @@ const App: React.FC = () => {
                 {isArtifactsOpen && (
                     <ArtifactsPanel
                         artifacts={artifacts}
+                        highlightedArtifactId={latestArtifactId}
+                        onShareArtifact={() => setUxMetrics(prev => ({ ...prev, shares: prev.shares + 1 }))}
                         onClose={handleArtifactsClose}
                     />
                 )}
