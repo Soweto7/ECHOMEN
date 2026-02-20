@@ -3,7 +3,7 @@ import { LogoIcon } from './icons/LogoIcon';
 import { DocumentTextIcon } from './icons/DocumentTextIcon';
 import { SettingsIcon } from './icons/SettingsIcon';
 import { ArchiveBoxIcon } from './icons/ArchiveBoxIcon';
-import { Task, AgentStatus, SessionStats } from '../types';
+import { Task, AgentStatus, SessionStats, ExperienceMode, UXMetrics } from '../types';
 import { SystemStatusIndicator } from './SystemStatusIndicator';
 import { TokenUsageIndicator } from './TokenUsageIndicator';
 
@@ -14,9 +14,16 @@ interface HeaderProps {
     tasks: Task[];
     agentStatus: AgentStatus;
     sessionStats: SessionStats;
+    experienceMode: ExperienceMode;
+    onExperienceModeChange: (mode: ExperienceMode) => void;
+    uxMetrics: UXMetrics;
 }
 
-export const Header: React.FC<HeaderProps> = ({ onSettingsClick, onHistoryClick, onArtifactsClick, tasks, agentStatus, sessionStats }) => {
+export const Header: React.FC<HeaderProps> = ({ onSettingsClick, onHistoryClick, onArtifactsClick, tasks, agentStatus, sessionStats, experienceMode, onExperienceModeChange, uxMetrics }) => {
+    const completionRate = uxMetrics.runsStarted > 0
+        ? Math.round((uxMetrics.runsCompleted / uxMetrics.runsStarted) * 100)
+        : 0;
+
     return (
         <header className="fixed top-0 left-0 right-0 bg-white/80 dark:bg-[#0A0A0A]/80 backdrop-blur-lg border-b border-black/10 dark:border-white/10 p-4 flex justify-between items-center z-50">
             <div className="flex items-center gap-3">
@@ -36,6 +43,25 @@ export const Header: React.FC<HeaderProps> = ({ onSettingsClick, onHistoryClick,
                 </button>
             </div>
             <div className="flex items-center gap-4">
+                <div className="hidden md:flex items-center gap-2 rounded-full border border-black/10 dark:border-white/15 p-1 bg-black/5 dark:bg-white/5">
+                    <button
+                        onClick={() => onExperienceModeChange('SERIOUS')}
+                        className={`px-2.5 py-1 text-xs font-semibold rounded-full transition-colors ${experienceMode === 'SERIOUS' ? 'bg-zinc-800 text-white dark:bg-white dark:text-black' : 'text-zinc-600 dark:text-gray-400'}`}
+                    >
+                        Serious Mode
+                    </button>
+                    <button
+                        onClick={() => onExperienceModeChange('SPICE')}
+                        className={`px-2.5 py-1 text-xs font-semibold rounded-full transition-colors ${experienceMode === 'SPICE' ? 'bg-[#FF6B00] text-white' : 'text-zinc-600 dark:text-gray-400'}`}
+                    >
+                        Spice Mode
+                    </button>
+                </div>
+                <div className="hidden lg:flex items-center gap-2 text-xs text-zinc-600 dark:text-gray-400 border border-black/10 dark:border-white/10 rounded-full px-3 py-1">
+                    <span>Completion {completionRate}%</span>
+                    <span>•</span>
+                    <span>Share rate {uxMetrics.runsCompleted > 0 ? Math.round((uxMetrics.shares / uxMetrics.runsCompleted) * 100) : 0}%</span>
+                </div>
                  <SystemStatusIndicator tasks={tasks} agentStatus={agentStatus} />
                  <div className="h-6 w-px bg-black/20 dark:bg-white/20"></div>
                  <TokenUsageIndicator stats={sessionStats} />

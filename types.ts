@@ -128,6 +128,16 @@ export enum AgentStatus {
     ERROR = 'ERROR',
 }
 
+export type ExperienceMode = 'SERIOUS' | 'SPICE';
+
+export interface UXMetrics {
+    runsStarted: number;
+    runsCompleted: number;
+    runsAbandoned: number;
+    shares: number;
+    lastDropOffTask: string | null;
+}
+
 // FIX: Moved Service-related types here to be globally available and fix import error.
 export type InputType = 'text' | 'password';
 
