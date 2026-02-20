@@ -1,5 +1,5 @@
-import { GoogleGenAI, FunctionDeclaration, Type, Chat, GenerateContentResponse } from "@google/genai";
-import type { Task, AgentRole, ToolCall, AgentPreferences, TodoItem, SubStep, Playbook, CustomAgent, Artifact } from '../types';
+import { GoogleGenAI, FunctionDeclaration, Type } from "@google/genai";
+import type { Task, AgentRole, ToolCall, AgentPreferences, TodoItem, SubStep, Playbook, CustomAgent, Artifact, ModelProviderConfig } from '../types';
 import { availableTools, toolDeclarations } from './tools';
 
 const structuredPlanSchema = {
@@ -35,8 +35,178 @@ const actionAnalysisSchema = {
     required: ["is_actionable", "suggested_prompt"]
 };
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-let chat: Chat | null = null;
+const env = import.meta.env as Record<string, string | undefined>;
+
+const defaultModelProvider: ModelProviderConfig = {
+    id: 'gemini-flash-main',
+    provider: 'GEMINI',
+    type: 'CLOUD',
+    description: 'Default Gemini provider.',
+    config: {
+        model_name: 'gemini-2.5-flash',
+        api_key_env_var: 'VITE_GEMINI_API_KEY',
+    },
+    integration_layer: 'NATIVE',
+    enabled: true,
+};
+
+const getActiveModelProvider = (): ModelProviderConfig => {
+    try {
+        const saved = localStorage.getItem('echo-model-providers');
+        if (saved) {
+            const providers = JSON.parse(saved) as ModelProviderConfig[];
+            const enabledProviders = providers.filter(p => p.enabled);
+            if (enabledProviders.length > 0) {
+                return enabledProviders[0];
+            }
+        }
+    } catch (error) {
+        console.error('Failed to parse model providers from localStorage', error);
+    }
+    return defaultModelProvider;
+};
+
+const resolveApiKey = (provider: ModelProviderConfig): string => {
+    const apiKeyEnvVar = provider.config.api_key_env_var;
+    if (!apiKeyEnvVar) return '';
+
+    const direct = env[apiKeyEnvVar];
+    if (direct) return direct;
+
+    const vitePrefixed = apiKeyEnvVar.startsWith('VITE_') ? apiKeyEnvVar : `VITE_${apiKeyEnvVar}`;
+    const viteValue = env[vitePrefixed];
+    if (viteValue) return viteValue;
+
+    if (apiKeyEnvVar.startsWith('VITE_')) {
+        return env[apiKeyEnvVar.replace('VITE_', '')] || '';
+    }
+
+    return '';
+};
+
+const generateWithGemini = async (
+    provider: ModelProviderConfig,
+    prompt: string,
+    onTokenUpdate: (count: number) => void,
+    options?: { systemInstruction?: string; responseMimeType?: 'application/json'; responseSchema?: object; temperature?: number }
+): Promise<string> => {
+    const apiKey = resolveApiKey(provider) || env.VITE_GEMINI_API_KEY || '';
+    if (!apiKey) {
+        throw new Error('Missing API key for Gemini provider. Set VITE_GEMINI_API_KEY.');
+    }
+
+    const ai = new GoogleGenAI({ apiKey });
+    const response = await ai.models.generateContent({
+        model: provider.config.model_name || 'gemini-2.5-flash',
+        contents: prompt,
+        config: {
+            systemInstruction: options?.systemInstruction,
+            responseMimeType: options?.responseMimeType,
+            responseSchema: options?.responseSchema,
+            temperature: options?.temperature,
+        },
+    });
+
+    if (response.usageMetadata?.totalTokenCount) {
+        onTokenUpdate(response.usageMetadata.totalTokenCount);
+    }
+
+    return response.text;
+};
+
+const generateWithOpenAICompatible = async (
+    provider: ModelProviderConfig,
+    prompt: string,
+    options?: { systemInstruction?: string; responseMimeType?: 'application/json'; temperature?: number }
+): Promise<string> => {
+    const baseUrl = (provider.config.base_url || provider.config.endpoint_url || '').replace(/\/$/, '');
+    if (!baseUrl) {
+        throw new Error(`Provider ${provider.provider} is enabled but has no base_url or endpoint_url configured.`);
+    }
+
+    const apiKey = resolveApiKey(provider);
+    const systemMessage = options?.responseMimeType === 'application/json'
+        ? `${options.systemInstruction || ''}
+Respond with valid JSON only.`.trim()
+        : (options?.systemInstruction || 'You are a helpful AI assistant.');
+
+    if (provider.provider === 'OLLAMA' && baseUrl.includes('/api/generate')) {
+        const response = await fetch(baseUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: provider.config.model_name,
+                prompt: `${systemMessage}
+
+${prompt}`,
+                stream: false,
+            }),
+        });
+
+        if (!response.ok) {
+            const body = await response.text();
+            throw new Error(`Ollama request failed (${response.status}): ${body}`);
+        }
+
+        const data = await response.json();
+        const content = data?.response;
+        if (!content || typeof content !== 'string') {
+            throw new Error('Ollama returned an empty response.');
+        }
+        return content;
+    }
+
+    const url = baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl}/chat/completions`;
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        },
+        body: JSON.stringify({
+            model: provider.config.model_name,
+            temperature: options?.temperature,
+            messages: [
+                { role: 'system', content: systemMessage },
+                { role: 'user', content: prompt },
+            ],
+        }),
+    });
+
+    if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`Provider request failed (${response.status}): ${body}`);
+    }
+
+    const data = await response.json();
+    const content = data?.choices?.[0]?.message?.content;
+    if (!content || typeof content !== 'string') {
+        throw new Error('Provider returned an empty response.');
+    }
+    return content;
+};
+
+const generateText = async (
+    prompt: string,
+    onTokenUpdate: (count: number) => void,
+    options?: { systemInstruction?: string; responseMimeType?: 'application/json'; responseSchema?: object; temperature?: number }
+): Promise<string> => {
+    const provider = getActiveModelProvider();
+
+    try {
+        if (provider.provider === 'GEMINI') {
+            return await generateWithGemini(provider, prompt, onTokenUpdate, options);
+        }
+        return await generateWithOpenAICompatible(provider, prompt, options);
+    } catch (error) {
+        const fallbackApiKey = env.VITE_GEMINI_API_KEY || '';
+        if (provider.provider !== 'GEMINI' && fallbackApiKey) {
+            console.warn(`Provider ${provider.provider} failed. Falling back to Gemini.`, error);
+            return generateWithGemini(defaultModelProvider, prompt, onTokenUpdate, options);
+        }
+        throw error;
+    }
+};
 
 const WELCOME_TRIGGERS = ['what can you do', 'help', 'explain yourself', 'what is this', 'hello', 'hi', 'what are you', 'who are you'];
 
@@ -75,13 +245,6 @@ My goal is to be your ultimate tool for creation and execution. Give it a try! S
 
 Your thoughts. My echo. Infinite possibility.`;
 
-const handleApiResponse = (response: GenerateContentResponse, onTokenUpdate: (count: number) => void): string => {
-    if (response.usageMetadata?.totalTokenCount) {
-        onTokenUpdate(response.usageMetadata.totalTokenCount);
-    }
-    return response.text;
-}
-
 export const analyzeChatMessageForAction = async (prompt: string, onTokenUpdate: (count: number) => void): Promise<{ is_actionable: boolean; suggested_prompt: string }> => {
     const systemInstruction = `You are an intent-recognition AI. Your task is to analyze a user's chat message and determine if it contains an actionable command (e.g., "build this", "create a file", "run this command", "can you write a script for...") versus a conversational query (e.g., "how does this work?", "what is...", "explain...").
 - If it's an actionable command, set 'is_actionable' to true and rephrase the command into a clear, concise prompt for another AI agent.
@@ -89,16 +252,11 @@ export const analyzeChatMessageForAction = async (prompt: string, onTokenUpdate:
 Your response MUST be a valid JSON object adhering to the provided schema.`;
 
     try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: actionAnalysisSchema,
-                systemInstruction: systemInstruction,
-            },
-        });
-        const resultJson = handleApiResponse(response, onTokenUpdate).trim();
+        const resultJson = (await generateText(prompt, onTokenUpdate, {
+            responseMimeType: "application/json",
+            responseSchema: actionAnalysisSchema,
+            systemInstruction,
+        })).trim();
         const result = JSON.parse(resultJson);
         return result;
     } catch (error) {
@@ -119,15 +277,10 @@ User: "make a new react component called header"
 Assistant: "Create a new React component named 'Header'. It should have a default export and a basic JSX structure."
 `;
     try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt,
-            config: {
-                systemInstruction: systemInstruction,
-                temperature: 0.2, // Be conservative with changes
-            },
-        });
-        return handleApiResponse(response, onTokenUpdate).trim();
+        return (await generateText(prompt, onTokenUpdate, {
+            systemInstruction,
+            temperature: 0.2, // Be conservative with changes
+        })).trim();
     } catch (error) {
         console.error("Error clarifying prompt:", error);
         return prompt; // Return original prompt on error
@@ -166,12 +319,7 @@ ${playbookDescriptions}
 `;
     
     try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: recallPrompt,
-        });
-
-        const bestId = handleApiResponse(response, onTokenUpdate).trim();
+        const bestId = (await generateText(recallPrompt, onTokenUpdate)).trim();
         if (bestId && bestId !== 'NONE') {
             return playbooks.find(p => p.id === bestId) || null;
         }
@@ -252,17 +400,11 @@ This context is for your awareness. Use it to create a more effective and inform
     }
 
     try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: structuredPlanSchema,
-                systemInstruction: systemInstruction,
-            },
+        const textResponse = await generateText(prompt, onTokenUpdate, {
+            responseMimeType: "application/json",
+            responseSchema: structuredPlanSchema,
+            systemInstruction,
         });
-        
-        const textResponse = handleApiResponse(response, onTokenUpdate);
 
         if (!textResponse || !textResponse.trim()) {
             throw new Error("The AI planner returned an empty response.");
@@ -350,16 +492,10 @@ ${history || "No actions taken yet."}
 What is your next action?
 `;
 
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-            responseMimeType: "application/json",
-            systemInstruction: "You are a methodical AI agent executor. Follow the ReAct (Reason-Act) pattern. Your response must be a single, valid JSON object representing your next thought and action, or a finalization signal.",
-        },
-    });
-    
-    const resultJson = handleApiResponse(response, onTokenUpdate).trim();
+    const resultJson = (await generateText(prompt, onTokenUpdate, {
+        responseMimeType: "application/json",
+        systemInstruction: "You are a methodical AI agent executor. Follow the ReAct (Reason-Act) pattern. Your response must be a single, valid JSON object representing your next thought and action, or a finalization signal.",
+    })).trim();
 
     try {
         const result = JSON.parse(resultJson);
@@ -387,17 +523,10 @@ export const getChatResponse = async (prompt: string, onTokenUpdate: (count: num
         return ECHO_EXPLANATION;
     }
 
-    if (!chat) {
-        chat = ai.chats.create({
-            model: 'gemini-2.5-flash',
-            config: {
-                systemInstruction: 'You are ECHO, a helpful AI assistant. You are direct, efficient, and concise in your responses.',
-            },
-        });
-    }
     try {
-        const response = await chat.sendMessage({ message: prompt });
-        return handleApiResponse(response, onTokenUpdate);
+        return await generateText(prompt, onTokenUpdate, {
+            systemInstruction: 'You are ECHO, a helpful AI assistant. You are direct, efficient, and concise in your responses.',
+        });
     } catch (error) {
         console.error("Error getting chat response:", error);
         if (error instanceof Error) {
@@ -421,12 +550,7 @@ Based on the original prompt and the successful plan, create a short, descriptiv
 `;
 
     try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: summarizationPrompt,
-        });
-
-        return handleApiResponse(response, onTokenUpdate).trim().replace(/"/g, '');
+        return (await generateText(summarizationPrompt, onTokenUpdate)).trim().replace(/"/g, '');
     } catch (error) {
         console.error("Error suggesting playbook name:", error);
         throw new Error("Could not suggest a name for the completed plan.");
