@@ -11,6 +11,8 @@ interface ArtifactsPanelProps {
     onClose: () => void;
 }
 
+const V1_PROMISE = 'ECHO turns a plain-English app idea into a deployment-ready build plan, code scaffold, and launch checklist in one guided run.';
+
 const CodeArtifact: React.FC<{ artifact: Artifact }> = ({ artifact }) => {
     const [copied, setCopied] = useState(false);
 
@@ -120,8 +122,8 @@ export const ArtifactsPanel: React.FC<ArtifactsPanelProps> = ({ artifacts, onClo
                     {artifacts.length === 0 ? (
                          <div className="flex flex-col items-center justify-center h-full text-center p-4 text-gray-500">
                             <ArchiveBoxIcon className="w-20 h-20 text-zinc-300 dark:text-zinc-700 mb-4" />
-                            <h3 className="text-lg font-bold">No Artifacts Generated</h3>
-                            <p className="max-w-sm mt-1">When an agent produces a final output like a code file or report, it will appear here.</p>
+                            <h3 className="text-lg font-bold">No launch assets yet</h3>
+                            <p className="max-w-sm mt-1">{V1_PROMISE}</p>
                         </div>
                     ) : (
                         <div className="space-y-6">

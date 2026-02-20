@@ -118,27 +118,6 @@ const App: React.FC = () => {
     };
 
     const handleSendCommand = async (prompt: string, isWebToolActive: boolean) => {
-        if (agentMode === AgentMode.CHAT) {
-            addMessage({ sender: 'user', text: prompt });
-            try {
-                const actionAnalysis = await analyzeChatMessageForAction(prompt, handleTokenUpdate);
-                if (actionAnalysis.is_actionable) {
-                    addMessage({
-                        sender: 'agent',
-                        text: 'It looks like you want me to perform an action. Shall I switch to Action Mode and execute this task?',
-                        type: 'action_prompt',
-                        suggestedPrompt: actionAnalysis.suggested_prompt,
-                    });
-                } else {
-                    const agentResponse = await getChatResponse(prompt, handleTokenUpdate);
-                    addMessage({ sender: 'agent', text: agentResponse });
-                }
-            } catch (error) {
-                 console.error("Error during chat analysis/response:", error);
-                 addMessage({ sender: 'agent', text: "Sorry, I encountered an error. Please try again." });
-            }
-            return;
-        }
 
         setTasks([]);
         setLiveLogs([]);
@@ -213,29 +192,10 @@ const App: React.FC = () => {
     };
     
     useEffect(() => {
-        const handleSynthesis = async () => {
-            if (agentStatus === AgentStatus.FINISHED && currentPrompt && tasks.length > 0 && !tasks[0].id.startsWith('playbook-')) {
-                setAgentStatus(AgentStatus.SYNTHESIZING);
-                addLog({ status: 'INFO', message: '[Synthesizer] Analyzing successful plan to create a new playbook...' });
-                try {
-                    const suggestedName = await suggestPlaybookName(currentPrompt, tasks, handleTokenUpdate);
-                    setPlaybookCandidate({
-                        suggestedName,
-                        tasks,
-                        triggerPrompt: currentPrompt,
-                    });
-                    setIsPlaybookModalOpen(true);
-                } catch (error) {
-                    const errorMessage = error instanceof Error ? error.message : String(error);
-                    addLog({ status: 'ERROR', message: `[Synthesizer] Failed to create playbook: ${errorMessage}` });
-                    setAgentStatus(AgentStatus.IDLE);
-                }
-            } else if (agentStatus === AgentStatus.FINISHED || agentStatus === AgentStatus.ERROR) {
-                setAgentStatus(AgentStatus.IDLE);
-            }
+        if (agentStatus === AgentStatus.FINISHED || agentStatus === AgentStatus.ERROR) {
+            setAgentStatus(AgentStatus.IDLE);
         }
-        handleSynthesis();
-    }, [agentStatus, currentPrompt, tasks]);
+    }, [agentStatus]);
 
 
     const handleSavePlaybook = (name: string, description: string) => {
@@ -293,8 +253,6 @@ const App: React.FC = () => {
     return (
         <div className="bg-zinc-100 dark:bg-[#0A0A0A] text-zinc-900 dark:text-gray-200 min-h-screen font-sans flex flex-col">
             <Header 
-                onSettingsClick={handleSettingsClick} 
-                onHistoryClick={handleHistoryClick} 
                 onArtifactsClick={handleArtifactsClick}
                 tasks={tasks}
                 agentStatus={agentStatus}
@@ -303,8 +261,7 @@ const App: React.FC = () => {
             
             <main className="flex-grow pt-24 pb-48 md:pb-40 flex flex-col">
                  <AnimatePresence mode="wait">
-                    {agentMode === AgentMode.ACTION ? (
-                        <motion.div
+                    <motion.div
                             key="action-mode"
                             initial="initial"
                             animate="in"
@@ -319,71 +276,23 @@ const App: React.FC = () => {
                                 onCancelTask={handleCancelTask}
                             />
                         </motion.div>
-                    ) : (
-                         <motion.div
-                            key="chat-mode"
-                            initial="initial"
-                            animate="in"
-                            exit="out"
-                            variants={pageVariants}
-                            transition={pageTransition}
-                            className="flex-grow flex flex-col"
-                        >
-                           <ChatInterface 
-                                messages={messages} 
-                                onSuggestionClick={handleSuggestionClick}
-                                onEditMessage={editMessage}
-                                onAcceptAction={handleAcceptAction}
-                                onDeclineAction={handleDeclineAction}
-                           />
-                        </motion.div>
-                    )}
                 </AnimatePresence>
             </main>
 
             <AnimatePresence>
-                {agentMode === AgentMode.ACTION && tasks.length > 0 && (
+                {tasks.length > 0 && (
                     <ExecutionStatusBar tasks={tasks} agentStatus={agentStatus} onStopExecution={handleStopExecution} />
                 )}
             </AnimatePresence>
 
             <CommandCenter 
-                agentMode={agentMode}
-                setAgentMode={setAgentMode}
                 onSendCommand={(prompt, isWebToolActive) => {
                     handleSendCommand(prompt, isWebToolActive);
                     setCommandCenterInput('');
                 }} 
-                onClearChat={() => {
-                    clearMemory();
-                    setSessionStats({ totalTokensUsed: 0 }); // Reset token count on new chat
-                }}
                 inputValue={commandCenterInput}
                 onInputChange={setCommandCenterInput}
             />
-            
-            <AnimatePresence>
-                {isSettingsOpen && (
-                    <MasterConfigurationPanel 
-                        onClose={handleSettingsClose}
-                        theme={theme}
-                        setTheme={setTheme}
-                    />
-                )}
-            </AnimatePresence>
-            <AnimatePresence>
-                {isHistoryOpen && (
-                    <HistoryPanel 
-                        tasks={tasks}
-                        messages={messages} 
-                        onClose={handleHistoryClose} 
-                        onClearChat={() => {
-                            clearMemory();
-                            handleHistoryClose();
-                        }}
-                    />
-                )}
-            </AnimatePresence>
             <AnimatePresence>
                 {isArtifactsOpen && (
                     <ArtifactsPanel
