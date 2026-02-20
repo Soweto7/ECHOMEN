@@ -3,7 +3,93 @@ import { Service } from '../types';
 
 const BACKEND_URL = 'http://localhost:3001/execute-tool';
 
+interface StructuredToolError {
+    code: string;
+    message: string;
+    retryable: boolean;
+    remediation?: string;
+    details?: Record<string, unknown>;
+}
+
+interface ToolBackendResponse<T = unknown> {
+    result?: T;
+    error?: StructuredToolError | string;
+    correlationId?: string;
+}
+
+class ToolBackendError extends Error {
+    code: string;
+    retryable: boolean;
+    correlationId: string;
+    remediation: string;
+
+    constructor(error: StructuredToolError, correlationId: string, fallbackRemediation: string) {
+        super(error.message);
+        this.name = 'ToolBackendError';
+        this.code = error.code;
+        this.retryable = error.retryable;
+        this.correlationId = correlationId;
+        this.remediation = error.remediation || fallbackRemediation;
+    }
+}
+
 // --- Helper Functions ---
+
+const getCorrelationId = (): string => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID();
+    }
+    return `tool-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+const getErrorRemediation = (toolName: string, code?: string): string => {
+    const remediationByCode: Record<string, string> = {
+        AUTH_REQUIRED: 'Reconnect the required integration in Settings and try again.',
+        SANDBOX_UNAVAILABLE: 'Connect Daytona or CodeSandbox in Settings before using filesystem or shell tools.',
+        FILE_NOT_FOUND: 'Verify the file path exists, then retry the command.',
+        INVALID_ARGUMENT: 'Review the tool arguments and rerun with valid values.',
+        COMMAND_FAILED: 'Inspect the command output, fix the command, and rerun.',
+        RATE_LIMITED: 'Wait a moment and retry. Consider reducing request frequency.',
+        NETWORK_ERROR: 'Check backend connectivity and confirm the tool execution service is running.',
+        UNKNOWN_TOOL: 'Use one of the declared tool names and retry the request.',
+    };
+
+    if (code && remediationByCode[code]) {
+        return remediationByCode[code];
+    }
+
+    if (toolName === 'browse_web') {
+        return 'Verify the URL is reachable and that your browsing integration is configured.';
+    }
+
+    if (toolName.includes('github_')) {
+        return 'Reconnect GitHub credentials in Settings and verify repository permissions.';
+    }
+
+    if (toolName.startsWith('memory_')) {
+        return 'Reconnect Supabase in Settings and verify the required tables are accessible.';
+    }
+
+    return 'Check tool inputs, then retry. If this persists, inspect backend logs using the correlation ID.';
+}
+
+const normalizeError = (toolName: string, rawError: unknown, correlationId: string): ToolBackendError => {
+    if (typeof rawError === 'object' && rawError !== null && 'code' in rawError && 'message' in rawError && 'retryable' in rawError) {
+        const structuredError = rawError as StructuredToolError;
+        return new ToolBackendError(structuredError, correlationId, getErrorRemediation(toolName, structuredError.code));
+    }
+
+    const fallbackMessage = typeof rawError === 'string' ? rawError : 'Unexpected backend error.';
+    return new ToolBackendError(
+        {
+            code: 'UNSTRUCTURED_BACKEND_ERROR',
+            message: fallbackMessage,
+            retryable: false,
+        },
+        correlationId,
+        getErrorRemediation(toolName),
+    );
+}
 
 /**
  * A centralized function to securely call the backend execution engine.
@@ -13,28 +99,60 @@ const BACKEND_URL = 'http://localhost:3001/execute-tool';
  * @throws An error if the backend call fails.
  */
 const callBackendTool = async (toolName: string, args: object): Promise<any> => {
+    const correlationId = getCorrelationId();
+
     try {
         const response = await fetch(BACKEND_URL, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
+                'X-Correlation-ID': correlationId,
             },
-            body: JSON.stringify({ tool: toolName, args }),
+            body: JSON.stringify({ tool: toolName, args, correlationId }),
         });
 
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.error || `Backend error: ${response.statusText}`);
+        let payload: ToolBackendResponse;
+        try {
+            payload = await response.json();
+        } catch {
+            payload = {};
         }
 
-        const result = await response.json();
-        return result.result;
-    } catch (error) {
-        console.error(`Error calling backend for tool '${toolName}':`, error);
-        if (error instanceof Error) {
-            throw new Error(`Failed to execute '${toolName}': ${error.message}. Is the ECHO Execution Engine running?`);
+        const responseCorrelationId = payload.correlationId || correlationId;
+
+        if (!response.ok) {
+            throw normalizeError(toolName, payload.error || `Backend error: ${response.statusText}`, responseCorrelationId);
         }
-        throw new Error(`An unknown error occurred while executing '${toolName}'.`);
+
+        if (payload.error) {
+            throw normalizeError(toolName, payload.error, responseCorrelationId);
+        }
+
+        return payload.result;
+    } catch (error) {
+        if (error instanceof ToolBackendError) {
+            console.error(`Error calling backend for tool '${toolName}' [${error.correlationId}]`, {
+                code: error.code,
+                retryable: error.retryable,
+                remediation: error.remediation,
+            });
+            throw new Error(
+                `Failed to execute '${toolName}' (code: ${error.code}, retryable: ${error.retryable}, correlationId: ${error.correlationId}). ` +
+                `${error.message} Remediation: ${error.remediation}`,
+            );
+        }
+
+        console.error(`Error calling backend for tool '${toolName}' [${correlationId}]`, error);
+        if (error instanceof Error) {
+            throw new Error(
+                `Failed to execute '${toolName}' (code: NETWORK_ERROR, retryable: true, correlationId: ${correlationId}). ` +
+                `${error.message}. Remediation: ${getErrorRemediation(toolName, 'NETWORK_ERROR')}`,
+            );
+        }
+        throw new Error(
+            `Failed to execute '${toolName}' (code: UNKNOWN_ERROR, retryable: false, correlationId: ${correlationId}). ` +
+            `An unknown error occurred. Remediation: ${getErrorRemediation(toolName)}`,
+        );
     }
 };
 
