@@ -1,0 +1,16 @@
+[
+  {
+    "id": "web-a11y-001",
+    "category": "web",
+    "prompt": "Audit a landing page for accessibility issues and provide concrete ARIA and keyboard navigation fixes.",
+    "mustInclude": ["accessibility", "keyboard"],
+    "hallucinationTriggers": ["WCAG 4.0"]
+  },
+  {
+    "id": "web-perf-002",
+    "category": "web",
+    "prompt": "Recommend front-end performance improvements for a React dashboard with large lists and frequent polling.",
+    "mustInclude": ["performance", "React"],
+    "hallucinationTriggers": ["HTTP/4"]
+  }
+]
