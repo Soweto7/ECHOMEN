@@ -59,7 +59,7 @@ ECHO runs entirely in your browser. To get started locally:
     -   Create a `.env` file in the project root.
     -   Add your Google AI Studio API key:
         ```
-        API_KEY=your_google_api_key_here
+        VITE_GEMINI_API_KEY=your_google_api_key_here
         ```
 
 3.  **Install dependencies and run:**
