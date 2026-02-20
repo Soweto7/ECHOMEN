@@ -143,7 +143,7 @@ export interface Service {
     name: string;
     icon: React.ReactNode;
     inputs: ServiceInput[];
-    status: 'Connected' | 'Not Connected';
+    status: 'Connected' | 'Not Connected' | 'Connection Error';
 }
 
 export type ArtifactType = 'code' | 'markdown' | 'log' | 'live-preview';

@@ -2,6 +2,7 @@ import { FunctionDeclaration, Type } from "@google/genai";
 import { Service } from '../types';
 
 const BACKEND_URL = 'http://localhost:3001/execute-tool';
+const SERVICE_AUTH_STORAGE_KEY = 'echo-service-auth';
 
 // --- Helper Functions ---
 
@@ -42,11 +43,33 @@ const callBackendTool = async (toolName: string, args: object): Promise<any> => 
 const checkAuth = (serviceId: string): boolean => {
     try {
         const savedServicesJSON = localStorage.getItem('echo-services');
-        if (savedServicesJSON) {
-            const services: Partial<Service>[] = JSON.parse(savedServicesJSON);
-            const service = services.find(s => s.id === serviceId);
-            return service?.status === 'Connected';
+        const savedServiceAuthJSON = localStorage.getItem(SERVICE_AUTH_STORAGE_KEY);
+        if (!savedServicesJSON || !savedServiceAuthJSON) {
+            return false;
         }
+
+        const services: Partial<Service>[] = JSON.parse(savedServicesJSON);
+        const service = services.find(s => s.id === serviceId);
+        if (service?.status !== 'Connected') {
+            return false;
+        }
+
+        const authMap = JSON.parse(savedServiceAuthJSON) as Record<string, { ref?: string; expiresAt?: string | null }>;
+        const authRecord = authMap[serviceId];
+        if (!authRecord?.ref) {
+            return false;
+        }
+
+        if (authRecord.expiresAt) {
+            const expiresAtMs = Date.parse(authRecord.expiresAt);
+            if (!Number.isNaN(expiresAtMs) && expiresAtMs <= Date.now()) {
+                const updatedServices = services.map(item => item.id === serviceId ? { ...item, status: 'Connection Error' } : item);
+                localStorage.setItem('echo-services', JSON.stringify(updatedServices));
+                return false;
+            }
+        }
+
+        return true;
     } catch (e) {
         console.error("Could not check auth status", e);
     }
@@ -157,21 +180,21 @@ const github_create_file_in_repo = async (repo_name: string, path: string, conte
 // --- Memory Tools (Supabase Integration) ---
 
 const memory_save = async (key: string, value: string, tags: string[]): Promise<string> => {
-    if (!checkAuth(\'supabase\')) throw new Error("Supabase service not connected for memory operations.");
-    return callBackendTool(\'memory_save\', { key, value, tags });
+    if (!checkAuth('supabase')) throw new Error("Supabase service not connected for memory operations.");
+    return callBackendTool('memory_save', { key, value, tags });
 };
 
 const memory_retrieve = async (key?: string, tags?: string[]): Promise<string> => {
-    if (!checkAuth(\'supabase\')) throw new Error("Supabase service not connected for memory operations.");
+    if (!checkAuth('supabase')) throw new Error("Supabase service not connected for memory operations.");
     if (!key && (!tags || tags.length === 0)) {
-        throw new Error("Must provide either a \'key\' or \'tags\' to retrieve memory.");
+        throw new Error("Must provide either a 'key' or 'tags' to retrieve memory.");
     }
-    return callBackendTool(\'memory_retrieve\', { key, tags });
+    return callBackendTool('memory_retrieve', { key, tags });
 };
 
 const memory_delete = async (key: string): Promise<string> => {
-    if (!checkAuth(\'supabase\')) throw new Error("Supabase service not connected for memory operations.");
-    return callBackendTool(\'memory_delete\', { key });
+    if (!checkAuth('supabase')) throw new Error("Supabase service not connected for memory operations.");
+    return callBackendTool('memory_delete', { key });
 };
 
 const data_analyze = async (input_file_path: string, analysis_script: string): Promise<string> => {
@@ -316,7 +339,7 @@ export const toolDeclarations: FunctionDeclaration[] = [
     },
     {
         name: 'memory_save',
-        description: 'Stores a piece of structured information or a key-value pair into the agent\'s long-term memory via Supabase. Use this to persist learned information, user preferences, or project details.',
+        description: 'Stores a piece of structured information or a key-value pair into the agent's long-term memory via Supabase. Use this to persist learned information, user preferences, or project details.',
         parameters: {
             type: Type.OBJECT, properties: {
                 key: { type: Type.STRING, description: 'A unique identifier for the memory item (e.g., "user_project_goals").' },
@@ -373,7 +396,7 @@ export const toolDeclarations: FunctionDeclaration[] = [
                 agent_name: { type: Type.STRING, description: 'A descriptive name for the new specialist agent (e.g., "DB Schema Designer").' },
                 agent_instructions: { type: Type.STRING, description: 'The full system prompt or instructions for the new agent, defining its role, capabilities, and constraints.' },
                 task_description: { type: Type.STRING, description: 'The specific, detailed task to be delegated to this new agent.' },
-                agent_icon: { type: Type.STRING, description: 'Optional. An icon name from the predefined list (e.g., "CodeForge", "Brain") for the agent\'s UI representation.' },
+                agent_icon: { type: Type.STRING, description: 'Optional. An icon name from the predefined list (e.g., "CodeForge", "Brain") for the agent's UI representation.' },
             }, required: ['agent_name', 'agent_instructions', 'task_description']
         }
     },
@@ -390,7 +413,7 @@ export const toolDeclarations: FunctionDeclaration[] = [
     },
     {
         name: 'askUser',
-        description: 'Asks the user a clarifying question when you are stuck or need more information to proceed with the task. The user\'s response will be returned as the observation.',
+        description: 'Asks the user a clarifying question when you are stuck or need more information to proceed with the task. The user's response will be returned as the observation.',
         parameters: {
             type: Type.OBJECT, properties: { 
                 question: { type: Type.STRING, description: 'The question to ask the user.' } 
