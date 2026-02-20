@@ -246,7 +246,9 @@ export class AgentExecutor {
                 return;
             }
 
-            const nextStep = await determineNextStep(task, subSteps, this.currentArtifacts, this.callbacks.onTokenUpdate);
+            const nextStep = await determineNextStep(task, subSteps, this.currentArtifacts, this.callbacks.onTokenUpdate, (message) => {
+                this.callbacks.onLog({ status: 'INFO', message });
+            });
 
             if ('isFinished' in nextStep) {
                 this.callbacks.onLog({ status: 'INFO', message: `[${task.agent.name}] Concluding task with reason: ${nextStep.finalThought}` });

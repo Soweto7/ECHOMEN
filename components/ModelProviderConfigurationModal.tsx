@@ -25,7 +25,7 @@ export const ModelProviderConfigurationModal: React.FC<ModelProviderConfiguratio
                     type: 'LOCAL',
                     integration_layer: 'LANGCHAIN',
                     enabled: true,
-                    config: { model_name: '' }
+                    config: { model_name: '', input_cost_per_1m_tokens_usd: 0, output_cost_per_1m_tokens_usd: 0, avg_latency_ms: 1200, quality_score: 0.8 }
                 });
             }
         }
@@ -149,6 +149,25 @@ export const ModelProviderConfigurationModal: React.FC<ModelProviderConfiguratio
                                     placeholder="https://api-inference.huggingface.co/models/..."
                                     className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg px-3 py-2 text-zinc-800 dark:text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-600/50 dark:focus:ring-[#00D4FF]/50"
                                 />
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Input Cost ($/1M tokens)</label>
+                                    <input type="number" step="0.01" min="0" value={formData.config?.input_cost_per_1m_tokens_usd ?? 0} onChange={(e) => handleConfigChange('input_cost_per_1m_tokens_usd', Number(e.target.value))} className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg px-3 py-2" />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Output Cost ($/1M tokens)</label>
+                                    <input type="number" step="0.01" min="0" value={formData.config?.output_cost_per_1m_tokens_usd ?? 0} onChange={(e) => handleConfigChange('output_cost_per_1m_tokens_usd', Number(e.target.value))} className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg px-3 py-2" />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Avg Latency (ms)</label>
+                                    <input type="number" step="1" min="1" value={formData.config?.avg_latency_ms ?? 1200} onChange={(e) => handleConfigChange('avg_latency_ms', Number(e.target.value))} className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg px-3 py-2" />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Quality Score (0-1)</label>
+                                    <input type="number" step="0.01" min="0" max="1" value={formData.config?.quality_score ?? 0.8} onChange={(e) => handleConfigChange('quality_score', Number(e.target.value))} className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg px-3 py-2" />
+                                </div>
                             </div>
                         </div>
 
