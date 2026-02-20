@@ -1,15 +1,30 @@
-import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useMemo, useState } from 'react';
+import { motion } from 'framer-motion';
 import { CloseIcon } from './icons/CloseIcon';
-import { Artifact } from '../types';
+import { Artifact, LogEntry, Task } from '../types';
 import { ArchiveBoxIcon } from './icons/ArchiveBoxIcon';
 import { ClipboardCheckIcon } from './icons/ClipboardCheckIcon';
 import { DocumentTextIcon } from './icons/DocumentTextIcon';
 
 interface ArtifactsPanelProps {
     artifacts: Artifact[];
+    tasks: Task[];
+    liveLogs: LogEntry[];
+    currentPrompt: string;
     onClose: () => void;
+    onShareRun: (data: { title: string; markdown: string; url: string }) => void;
 }
+
+const sanitizeText = (input: string): string => {
+    const apiKeyPattern = /(api[_-]?key|token|secret|password)\s*[:=]\s*["']?([a-z0-9._-]{8,})["']?/gi;
+    const bearerPattern = /(bearer\s+)([a-z0-9._-]{8,})/gi;
+    const envPattern = /(sk-[a-z0-9]{10,}|AIza[\w-]{20,})/g;
+
+    return input
+        .replace(apiKeyPattern, '$1=[REDACTED]')
+        .replace(bearerPattern, '$1[REDACTED]')
+        .replace(envPattern, '[REDACTED]');
+};
 
 const CodeArtifact: React.FC<{ artifact: Artifact }> = ({ artifact }) => {
     const [copied, setCopied] = useState(false);
@@ -88,8 +103,52 @@ const LivePreviewArtifact: React.FC<{ artifact: Artifact }> = ({ artifact }) => 
     );
 };
 
+export const ArtifactsPanel: React.FC<ArtifactsPanelProps> = ({ artifacts, tasks, liveLogs, currentPrompt, onClose, onShareRun }) => {
+    const [isCreatingShare, setIsCreatingShare] = useState(false);
 
-export const ArtifactsPanel: React.FC<ArtifactsPanelProps> = ({ artifacts, onClose }) => {
+    const completedTasks = useMemo(() => tasks.filter(task => task.status === 'Done').length, [tasks]);
+
+    const buildExecutionReport = () => {
+        const now = new Date().toISOString();
+        const runId = `run-${Date.now()}`;
+        const shareUrl = `${window.location.origin}${window.location.pathname}#shared-run=${runId}`;
+
+        const sanitizedPrompt = sanitizeText(currentPrompt || 'No prompt captured for this run.');
+        const taskSummary = tasks
+            .map(task => `- ${task.title} | ${task.status} | Agent: ${task.agent.name}`)
+            .join('\n');
+        const logSummary = liveLogs
+            .slice(-20)
+            .map(log => `- [${log.status}] ${sanitizeText(log.message)}`)
+            .join('\n');
+
+        const markdown = `# ECHO Shared Run Report\n\n- **Run ID:** ${runId}\n- **Generated:** ${now}\n- **Prompt:** ${sanitizedPrompt}\n- **Tasks:** ${tasks.length} total / ${completedTasks} completed\n- **Artifacts:** ${artifacts.length}\n\n## Task Summary\n${taskSummary || '- No tasks recorded.'}\n\n## Recent Logs (Sanitized)\n${logSummary || '- No logs recorded.'}\n\n## Share URL\n${shareUrl}\n`;
+
+        return { markdown, runId, shareUrl };
+    };
+
+    const handleShareRun = async () => {
+        setIsCreatingShare(true);
+        const { markdown, runId, shareUrl } = buildExecutionReport();
+
+        onShareRun({
+            title: `Shared Run Report (${runId})`,
+            markdown,
+            url: shareUrl,
+        });
+
+        const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${runId}.md`;
+        link.click();
+        URL.revokeObjectURL(url);
+
+        await navigator.clipboard.writeText(shareUrl);
+        setIsCreatingShare(false);
+    };
+
     return (
         <motion.div
             className="fixed inset-0 z-50 flex justify-end"
@@ -106,16 +165,26 @@ export const ArtifactsPanel: React.FC<ArtifactsPanelProps> = ({ artifacts, onClo
                 transition={{ type: 'spring', stiffness: 300, damping: 30 }}
                 onClick={(e) => e.stopPropagation()}
             >
-                <header className="p-6 flex justify-between items-center border-b border-black/10 dark:border-white/10 flex-shrink-0">
+                <header className="p-6 flex justify-between items-center border-b border-black/10 dark:border-white/10 flex-shrink-0 gap-3">
                     <h2 className="flex items-center gap-3 text-xl font-bold text-zinc-800 dark:text-gray-100">
                         <ArchiveBoxIcon className="w-6 h-6 text-green-500" />
                         Generated Artifacts
                     </h2>
-                    <button onClick={onClose} className="text-gray-500 hover:text-black dark:hover:text-white transition-colors">
-                        <CloseIcon className="w-6 h-6" />
-                    </button>
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={handleShareRun}
+                            disabled={isCreatingShare}
+                            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-md bg-green-500/20 text-green-500 hover:bg-green-500/30 disabled:opacity-60"
+                        >
+                            <DocumentTextIcon className="w-4 h-4" />
+                            {isCreatingShare ? 'Creating...' : 'Share Run'}
+                        </button>
+                        <button onClick={onClose} className="text-gray-500 hover:text-black dark:hover:text-white transition-colors">
+                            <CloseIcon className="w-6 h-6" />
+                        </button>
+                    </div>
                 </header>
-                
+
                 <div className="p-6 flex-grow overflow-y-auto">
                     {artifacts.length === 0 ? (
                          <div className="flex flex-col items-center justify-center h-full text-center p-4 text-gray-500">
@@ -130,7 +199,7 @@ export const ArtifactsPanel: React.FC<ArtifactsPanelProps> = ({ artifacts, onClo
                                     case 'live-preview':
                                         return <LivePreviewArtifact key={artifact.id} artifact={artifact} />;
                                     case 'code':
-                                    case 'markdown': // Render markdown as code for now
+                                    case 'markdown':
                                         return <CodeArtifact key={artifact.id} artifact={artifact} />;
                                     default:
                                         return (

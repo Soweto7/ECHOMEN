@@ -53,6 +53,21 @@ const App: React.FC = () => {
     const handleArtifactsClick = () => setIsArtifactsOpen(true);
     const handleArtifactsClose = () => setIsArtifactsOpen(false);
 
+    const handleShareRunArtifact = ({ title, markdown, url }: { title: string; markdown: string; url: string }) => {
+        const newArtifact: Artifact = {
+            id: `artifact-${Date.now()}`,
+            taskId: 'run-share',
+            title,
+            type: 'markdown',
+            content: `${markdown}
+
+> Share URL copied to clipboard: ${url}`,
+            createdAt: new Date().toISOString(),
+        };
+        setArtifacts(prev => [...prev, newArtifact]);
+        addLog({ status: 'SUCCESS', message: `[System] Share run artifact created: "${title}"` });
+    };
+
     const handleTokenUpdate = (tokenCount: number) => {
         if (typeof tokenCount === 'number' && !isNaN(tokenCount)) {
             setSessionStats(prev => ({ ...prev, totalTokensUsed: prev.totalTokensUsed + tokenCount }));
@@ -388,7 +403,11 @@ const App: React.FC = () => {
                 {isArtifactsOpen && (
                     <ArtifactsPanel
                         artifacts={artifacts}
+                        tasks={tasks}
+                        liveLogs={liveLogs}
+                        currentPrompt={currentPrompt}
                         onClose={handleArtifactsClose}
+                        onShareRun={handleShareRunArtifact}
                     />
                 )}
             </AnimatePresence>

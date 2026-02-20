@@ -74,6 +74,17 @@ ECHO runs entirely in your browser. To get started locally:
 
 4.  Open your browser to the local server address (e.g., `http://localhost:8000`).
 
+
+## 📚 Documentation Hub
+
+- [Quickstart](docs/quickstart.md)
+- [Local Cost Setup](docs/local-cost-setup.md)
+- [Real-Tool Backend Setup](docs/real-tool-backend-setup.md)
+- [Demo Flows](demos/demo-flows.md)
+- [Founder-Led Content Cadence](docs/content-cadence.md)
+- [Public Roadmap](docs/public-roadmap.md)
+- [Weekly Changelog](CHANGELOG.md)
+
 ## 🛠️ Technology Stack
 
 -   **Frontend:** React 19, TypeScript, TailwindCSS
