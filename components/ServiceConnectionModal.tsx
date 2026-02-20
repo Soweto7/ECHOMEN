@@ -8,7 +8,7 @@ interface ServiceConnectionModalProps {
     service: Service | null;
     isOpen: boolean;
     onClose: () => void;
-    onSave: (serviceId: string, values: { [key: string]: string }) => void;
+    onSave: (serviceId: string, values: { [key: string]: string }) => Promise<void> | void;
     onDisconnect: (serviceId: string) => void;
 }
 
@@ -16,6 +16,7 @@ export const ServiceConnectionModal: React.FC<ServiceConnectionModalProps> = ({ 
     const [formState, setFormState] = useState<{ [key: string]: string }>({});
     const [errors, setErrors] = useState<{ [key: string]: string | null }>({});
     const [touched, setTouched] = useState<{ [key: string]: boolean }>({});
+    const [isSaving, setIsSaving] = useState(false);
 
     useEffect(() => {
         if (service) {
@@ -73,7 +74,7 @@ export const ServiceConnectionModal: React.FC<ServiceConnectionModalProps> = ({ 
         setErrors(prev => ({ ...prev, [id]: validateInput(id, formState[id] || '') }));
     };
 
-    const handleSave = () => {
+    const handleSave = async () => {
         if (isSaveDisabled) return;
 
         let hasErrors = false;
@@ -93,7 +94,12 @@ export const ServiceConnectionModal: React.FC<ServiceConnectionModalProps> = ({ 
         setTouched(newTouched);
 
         if (!hasErrors) {
-            onSave(service.id, formState);
+            setIsSaving(true);
+            try {
+                await onSave(service.id, formState);
+            } finally {
+                setIsSaving(false);
+            }
         }
     };
 
@@ -179,10 +185,10 @@ export const ServiceConnectionModal: React.FC<ServiceConnectionModalProps> = ({ 
                             ) : <div></div>}
                             <button
                                 onClick={handleSave}
-                                disabled={isSaveDisabled}
+                                disabled={isSaveDisabled || isSaving}
                                 className="bg-[#8B5CF6] hover:bg-[#7c4ee3] text-white font-bold py-2 px-6 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                                {service.status === 'Connected' ? 'Save Changes' : 'Save Connection'}
+                                {isSaving ? 'Validating...' : service.status === 'Connected' ? 'Save Changes' : 'Save Connection'}
                             </button>
                         </footer>
                     </motion.div>

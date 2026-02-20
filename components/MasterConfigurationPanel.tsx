@@ -15,6 +15,8 @@ import { GenericApiIcon } from './icons/GenericApiIcon';
 import { AgentCreationModal } from './AgentCreationModal';
 // FIX: Added Service to the import from the central types file.
 import { CustomAgent, Playbook, AgentPreferences, AgentRole, TodoItem, Service, ModelProviderConfig } from '../types';
+import { validateServiceConnection } from '../services/serviceValidation';
+import { appendImmutableAuditLog } from '../services/security';
 import { PencilIcon } from './icons/PencilIcon';
 import { TrashIcon } from './icons/TrashIcon';
 import { PlusIcon } from './icons/PlusIcon';
@@ -223,7 +225,7 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
                 // Merge with initialServices to ensure all services are present, preserving status
                 return initialServices.map(is => {
                     const saved = savedServices.find((ss: Service) => ss.id === is.id);
-                    return saved ? { ...is, status: saved.status } : is;
+                    return saved ? { ...is, status: saved.status, validatedByBackend: Boolean(saved.validatedByBackend) } : is;
                 });
             }
         } catch (error) {
@@ -338,7 +340,7 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
     useEffect(() => {
         try {
             // Persist only the ID and status of services to avoid storing sensitive info
-            const servicesToSave = services.map(({ id, status }) => ({ id, status }));
+            const servicesToSave = services.map(({ id, status, validatedByBackend }) => ({ id, status, validatedByBackend: Boolean(validatedByBackend) }));
             localStorage.setItem('echo-services', JSON.stringify(servicesToSave));
         } catch(error) {
             console.error("Failed to save services to localStorage", error);
@@ -386,16 +388,33 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
     const [isAgentModalOpen, setIsAgentModalOpen] = useState(false);
     const [editingAgent, setEditingAgent] = useState<CustomAgent | null>(null);
 
-    const handleSaveService = (serviceId: string, values: { [key: string]: string }) => {
-        console.log(`Saving service ${serviceId}`, values);
-        // Here you would typically encrypt and save the credentials
-        setServices(prev => prev.map(s => s.id === serviceId ? { ...s, status: 'Connected' } : s));
+    const handleSaveService = async (serviceId: string, values: { [key: string]: string }) => {
+        const isValidConnection = await validateServiceConnection(serviceId, values);
+        setServices(prev => prev.map(s => {
+            if (s.id !== serviceId) return s;
+            return {
+                ...s,
+                status: isValidConnection ? 'Connected' : 'Not Connected',
+                validatedByBackend: isValidConnection,
+            };
+        }));
+        appendImmutableAuditLog({
+            eventType: 'external_integration',
+            source: `service_settings:${serviceId}`,
+            status: isValidConnection ? 'success' : 'failure',
+            payload: { action: 'save_connection' },
+        });
         setSelectedService(null);
     };
     
     const handleDisconnectService = (serviceId: string) => {
-        console.log(`Disconnecting service ${serviceId}`);
-        setServices(prev => prev.map(s => s.id === serviceId ? { ...s, status: 'Not Connected' } : s));
+        setServices(prev => prev.map(s => s.id === serviceId ? { ...s, status: 'Not Connected', validatedByBackend: false } : s));
+        appendImmutableAuditLog({
+            eventType: 'external_integration',
+            source: `service_settings:${serviceId}`,
+            status: 'success',
+            payload: { action: 'disconnect' },
+        });
         setSelectedService(null);
     };
 

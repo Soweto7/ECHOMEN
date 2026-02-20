@@ -160,7 +160,7 @@ const App: React.FC = () => {
             addLog({ status: 'INFO', message: '[Planner] Deconstructing the request...' });
             
             // Gather full context for the planner
-            const connectedServices = JSON.parse(localStorage.getItem('echo-services') || '[]').filter((s: Service) => s.status === 'Connected').map((s: Service) => s.name);
+            const connectedServices = JSON.parse(localStorage.getItem('echo-services') || '[]').filter((s: Service) => s.status === 'Connected' && s.validatedByBackend === true).map((s: Service) => s.id);
             const playbooks = JSON.parse(localStorage.getItem('echo-playbooks') || '[]') as Playbook[];
             const customAgents = JSON.parse(localStorage.getItem('echo-custom-agents') || '[]') as CustomAgent[];
             const todos = JSON.parse(localStorage.getItem('echo-todo-list') || '[]') as TodoItem[];
