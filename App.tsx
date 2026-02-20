@@ -4,7 +4,7 @@ import { CommandCenter } from './components/CommandCenter';
 import { ExecutionDashboard } from './components/ExecutionDashboard';
 import { MasterConfigurationPanel } from './components/MasterConfigurationPanel';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Task, LogEntry, AgentMode, AgentStatus, Artifact, CustomAgent, Service, Playbook, TodoItem, SessionStats } from './types';
+import { Task, LogEntry, AgentMode, AgentStatus, Artifact, CustomAgent, Service, Playbook, TodoItem, SessionStats, SessionBudgetSettings, ModelProviderConfig } from './types';
 import { createInitialPlan, getChatResponse, suggestPlaybookName, clarifyAndCorrectPrompt, analyzeChatMessageForAction } from './services/planner';
 import { useMemory } from './hooks/useMemory';
 import { ChatInterface } from './components/ChatInterface';
@@ -13,6 +13,7 @@ import { ExecutionStatusBar } from './components/ExecutionStatusBar';
 import { AgentExecutor } from './services/agentExecutor';
 import { ArtifactsPanel } from './components/ArtifactsPanel';
 import { PlaybookCreationModal } from './components/PlaybookCreationModal';
+import { estimateCostUsd, selectProviderWithPolicy } from './services/modelRouting';
 
 const App: React.FC = () => {
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -30,6 +31,7 @@ const App: React.FC = () => {
     const [currentPrompt, setCurrentPrompt] = useState<string>('');
     const [commandCenterInput, setCommandCenterInput] = useState<string>('');
     const [sessionStats, setSessionStats] = useState<SessionStats>({ totalTokensUsed: 0 });
+    const [sessionBudget, setSessionBudget] = useState<SessionBudgetSettings>({ enabled: false, capUsd: 5, alertThresholdPercent: 80 });
     const [playbookCandidate, setPlaybookCandidate] = useState<{ suggestedName: string; tasks: Task[]; triggerPrompt: string } | null>(null);
 
     const executorRef = useRef<AgentExecutor | null>(null);
@@ -41,6 +43,17 @@ const App: React.FC = () => {
             document.documentElement.classList.remove('dark');
         }
     }, [theme]);
+
+    useEffect(() => {
+        try {
+            const savedBudget = localStorage.getItem('echo-session-budget-settings');
+            if (savedBudget) {
+                setSessionBudget(JSON.parse(savedBudget));
+            }
+        } catch (error) {
+            console.error('Failed to load budget settings', error);
+        }
+    }, []);
     
     const handleSuggestionClick = (prompt: string) => {
         setCommandCenterInput(prompt);
@@ -55,9 +68,37 @@ const App: React.FC = () => {
 
     const handleTokenUpdate = (tokenCount: number) => {
         if (typeof tokenCount === 'number' && !isNaN(tokenCount)) {
-            setSessionStats(prev => ({ ...prev, totalTokensUsed: prev.totalTokensUsed + tokenCount }));
+            setSessionStats(prev => {
+                const nextTokens = prev.totalTokensUsed + tokenCount;
+                const providers = JSON.parse(localStorage.getItem('echo-model-providers') || '[]') as ModelProviderConfig[];
+                const routingSettings = JSON.parse(localStorage.getItem('echo-routing-settings') || '{"policy":"HYBRID"}');
+                const selection = selectProviderWithPolicy(providers, routingSettings, 'gemini-2.5-flash');
+                const estimatedCost = selection ? estimateCostUsd(selection.primary, Math.floor(nextTokens * 0.5), Math.ceil(nextTokens * 0.5)) : 0;
+
+                if (sessionBudget.enabled && sessionBudget.capUsd > 0) {
+                    const projectedPercent = (estimatedCost / sessionBudget.capUsd) * 100;
+                    if (projectedPercent >= sessionBudget.alertThresholdPercent) {
+                        addLog({
+                            status: 'WARN',
+                            message: `[Budget] Projected session cost $${estimatedCost.toFixed(4)} (${projectedPercent.toFixed(1)}% of $${sessionBudget.capUsd.toFixed(2)} cap) exceeds alert threshold.`
+                        });
+                    }
+                    if (projectedPercent >= 100) {
+                        addLog({
+                            status: 'ERROR',
+                            message: `[Budget] Session cap reached. Projected cost $${estimatedCost.toFixed(4)} exceeds configured cap of $${sessionBudget.capUsd.toFixed(2)}.`
+                        });
+                        executorRef.current?.stop();
+                        setAgentStatus(AgentStatus.ERROR);
+                    }
+                }
+
+                return { ...prev, totalTokensUsed: nextTokens, estimatedCostUsd: estimatedCost };
+            });
         }
     };
+
+    const handleRoutingLog = (message: string) => addLog({ status: 'INFO', message });
 
     const addLog = (log: Omit<LogEntry, 'timestamp'>) => {
         const newLog = { ...log, timestamp: new Date().toISOString() };
@@ -121,7 +162,7 @@ const App: React.FC = () => {
         if (agentMode === AgentMode.CHAT) {
             addMessage({ sender: 'user', text: prompt });
             try {
-                const actionAnalysis = await analyzeChatMessageForAction(prompt, handleTokenUpdate);
+                const actionAnalysis = await analyzeChatMessageForAction(prompt, handleTokenUpdate, handleRoutingLog);
                 if (actionAnalysis.is_actionable) {
                     addMessage({
                         sender: 'agent',
@@ -130,7 +171,7 @@ const App: React.FC = () => {
                         suggestedPrompt: actionAnalysis.suggested_prompt,
                     });
                 } else {
-                    const agentResponse = await getChatResponse(prompt, handleTokenUpdate);
+                    const agentResponse = await getChatResponse(prompt, handleTokenUpdate, handleRoutingLog);
                     addMessage({ sender: 'agent', text: agentResponse });
                 }
             } catch (error) {
@@ -150,7 +191,7 @@ const App: React.FC = () => {
 
         try {
             addLog({ status: 'INFO', message: '[Planner] Analyzing and clarifying prompt...' });
-            const correctedPrompt = await clarifyAndCorrectPrompt(prompt, handleTokenUpdate);
+            const correctedPrompt = await clarifyAndCorrectPrompt(prompt, handleTokenUpdate, handleRoutingLog);
             if (prompt !== correctedPrompt) {
                  addLog({ status: 'SUCCESS', message: `[Planner] Refined prompt: "${correctedPrompt}"` });
             } else {
@@ -172,7 +213,7 @@ const App: React.FC = () => {
                 activeTodos: todos.filter(t => !t.isCompleted),
             };
 
-            const initialTasks = await createInitialPlan(correctedPrompt, isWebToolActive, executionContext, handleTokenUpdate);
+            const initialTasks = await createInitialPlan(correctedPrompt, isWebToolActive, executionContext, handleTokenUpdate, handleRoutingLog);
             setTasks(initialTasks);
             
             if (initialTasks.length > 0 && initialTasks[0].id.startsWith('playbook-')) {
@@ -218,7 +259,7 @@ const App: React.FC = () => {
                 setAgentStatus(AgentStatus.SYNTHESIZING);
                 addLog({ status: 'INFO', message: '[Synthesizer] Analyzing successful plan to create a new playbook...' });
                 try {
-                    const suggestedName = await suggestPlaybookName(currentPrompt, tasks, handleTokenUpdate);
+                    const suggestedName = await suggestPlaybookName(currentPrompt, tasks, handleTokenUpdate, handleRoutingLog);
                     setPlaybookCandidate({
                         suggestedName,
                         tasks,
