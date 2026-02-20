@@ -13,6 +13,7 @@ interface AgentExecutorCallbacks {
     onAgentCreated: (agent: CustomAgent) => void;
     onFinish: () => void;
     onFail: (errorMessage: string) => void;
+    onPlaybookRunScored?: (outcome: { playbookId: string; success: boolean }) => void;
 }
 
 export class AgentExecutor {
@@ -25,10 +26,40 @@ export class AgentExecutor {
         this.callbacks = callbacks;
     }
 
+    private async runPlaybookDryRun(playbookId: string): Promise<void> {
+        this.callbacks.onLog({ status: 'INFO', message: `[Replay] Starting dry-run validation for playbook ${playbookId}.` });
+
+        const missingDependencies = this.tasks.filter(task =>
+            task.dependencies.some(depId => !this.tasks.some(t => t.id === depId))
+        );
+
+        if (missingDependencies.length > 0) {
+            const missingTaskTitles = missingDependencies.map(t => t.title).join(', ');
+            throw new Error(`Dry-run failed. Missing task dependencies for: ${missingTaskTitles}`);
+        }
+
+        this.callbacks.onLog({ status: 'SUCCESS', message: '[Replay] Dry-run completed. No dependency issues detected.' });
+    }
+
     public async run(initialTasks: Task[], prompt: string, initialArtifacts: Artifact[]) {
         this.isStopped = false;
         this.tasks = [...initialTasks];
         this.currentArtifacts = [...initialArtifacts];
+
+        if (initialTasks[0]?.id.startsWith('playbook-')) {
+            const playbookId = initialTasks[0].id.replace(/^playbook-/, '').split('-').slice(0, 2).join('-');
+            try {
+                await this.runPlaybookDryRun(playbookId);
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                this.callbacks.onLog({ status: 'ERROR', message: `[Replay] ${errorMessage}` });
+                if (this.callbacks.onPlaybookRunScored) {
+                    this.callbacks.onPlaybookRunScored({ playbookId, success: false });
+                }
+                this.callbacks.onFail(errorMessage);
+                return;
+            }
+        }
 
         const MAX_PARALLEL_TASKS = 4;
         const activePromises = new Map<string, Promise<boolean>>();
@@ -80,16 +111,25 @@ export class AgentExecutor {
         }
         
         // Final status check
+        const isFromPlaybook = initialTasks[0]?.id.startsWith('playbook-');
+        const playbookId = isFromPlaybook ? initialTasks[0].id.replace(/^playbook-/, '').split('-').slice(0, 2).join('-') : null;
+
         if (this.tasks.every(t => t.status === 'Done' || t.status === 'Cancelled')) {
-            const isFromPlaybook = initialTasks[0]?.id.startsWith('playbook-');
             if(!isFromPlaybook) {
                 this.callbacks.onFinish();
             } else {
-                 this.callbacks.onLog({ status: 'SUCCESS', message: 'ECHO: Playbook executed successfully.' });
+                this.callbacks.onLog({ status: 'SUCCESS', message: 'ECHO: Playbook executed successfully.' });
+                if (playbookId && this.callbacks.onPlaybookRunScored) {
+                    this.callbacks.onPlaybookRunScored({ playbookId, success: true });
+                }
+                this.callbacks.onFinish();
             }
         } else {
              const remainingTasks = this.tasks.filter(t => t.status === 'Queued' || t.status === 'Pending Review').length;
              if (remainingTasks > 0) {
+                if (playbookId && this.callbacks.onPlaybookRunScored) {
+                    this.callbacks.onPlaybookRunScored({ playbookId, success: false });
+                }
                 this.callbacks.onFail(`Could not complete all tasks. ${remainingTasks} tasks remain unresolved.`);
              } else if (!this.tasks.some(t => t.status === 'Error')) {
                 this.callbacks.onFinish();

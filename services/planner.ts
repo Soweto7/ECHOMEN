@@ -2,6 +2,17 @@ import { GoogleGenAI, FunctionDeclaration, Type, Chat, GenerateContentResponse }
 import type { Task, AgentRole, ToolCall, AgentPreferences, TodoItem, SubStep, Playbook, CustomAgent, Artifact } from '../types';
 import { availableTools, toolDeclarations } from './tools';
 
+const normalizePlaybook = (playbook: Playbook): Playbook => ({
+    ...playbook,
+    version: playbook.version ?? 1,
+    createdFromRunId: playbook.createdFromRunId ?? 'legacy-run',
+    runCount: playbook.runCount ?? 0,
+    successCount: playbook.successCount ?? 0,
+    successRate: playbook.successRate ?? 0,
+    retrievalBoost: playbook.retrievalBoost ?? 0,
+    isArchived: playbook.isArchived ?? false,
+});
+
 const structuredPlanSchema = {
     type: Type.ARRAY,
     description: "An array of task objects that represent the plan.",
@@ -149,9 +160,16 @@ const getAgentNameForRole = (role: AgentRole, preferences: AgentPreferences): st
 }
 
 const findRelevantPlaybook = async (prompt: string, playbooks: Playbook[], onTokenUpdate: (count: number) => void): Promise<Playbook | null> => {
-    if (playbooks.length === 0) return null;
+    const candidatePlaybooks = playbooks.map(normalizePlaybook).filter(p => !p.isArchived);
+    if (candidatePlaybooks.length === 0) return null;
 
-    const playbookDescriptions = playbooks.map(p => `ID: ${p.id}, Description: ${p.triggerPrompt}`).join('\n');
+    const prioritizedPlaybooks = [...candidatePlaybooks].sort((a, b) => {
+        const weightedA = (a.successRate * 0.8) + (a.retrievalBoost * 0.2);
+        const weightedB = (b.successRate * 0.8) + (b.retrievalBoost * 0.2);
+        return weightedB - weightedA;
+    }).slice(0, 7);
+
+    const playbookDescriptions = prioritizedPlaybooks.map(p => `ID: ${p.id}, SuccessRate: ${p.successRate.toFixed(1)}%, Boost: ${p.retrievalBoost}, Description: ${p.triggerPrompt}`).join('\n');
     
     const recallPrompt = `
 User Prompt: "${prompt}"
@@ -159,6 +177,7 @@ User Prompt: "${prompt}"
 Based on the user's prompt, which of the following saved playbooks is the most relevant?
 A good match means the playbook's description is very similar in intent to the user's prompt.
 If you find a strong match, respond with ONLY the ID of that playbook.
+When multiple playbooks are relevant, prefer higher SuccessRate and then higher Boost.
 If none are a good match, respond with "NONE".
 
 Available Playbooks:
@@ -173,13 +192,13 @@ ${playbookDescriptions}
 
         const bestId = handleApiResponse(response, onTokenUpdate).trim();
         if (bestId && bestId !== 'NONE') {
-            return playbooks.find(p => p.id === bestId) || null;
+            return prioritizedPlaybooks.find(p => p.id === bestId) || null;
         }
     } catch (error) {
         console.error("Error finding relevant playbook:", error);
     }
-    
-    return null;
+
+    return prioritizedPlaybooks[0] ?? null;
 }
 
 const rehydrateTasksFromPlaybook = (playbook: Playbook, preferences: AgentPreferences): Task[] => {
