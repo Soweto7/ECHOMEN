@@ -161,12 +161,15 @@ const App: React.FC = () => {
             
             // Gather full context for the planner
             const connectedServices = JSON.parse(localStorage.getItem('echo-services') || '[]').filter((s: Service) => s.status === 'Connected').map((s: Service) => s.name);
+            const connectedMcpServers = JSON.parse(localStorage.getItem('echo-mcp-servers') || '[]')
+                .filter((server: { status: string }) => server.status === 'connected')
+                .map((server: { name: string }) => `MCP:${server.name}`);
             const playbooks = JSON.parse(localStorage.getItem('echo-playbooks') || '[]') as Playbook[];
             const customAgents = JSON.parse(localStorage.getItem('echo-custom-agents') || '[]') as CustomAgent[];
             const todos = JSON.parse(localStorage.getItem('echo-todo-list') || '[]') as TodoItem[];
             
             const executionContext = {
-                connectedServices,
+                connectedServices: [...connectedServices, ...connectedMcpServers],
                 playbooks,
                 customAgents,
                 activeTodos: todos.filter(t => !t.isCompleted),

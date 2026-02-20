@@ -14,7 +14,7 @@ import { SupabaseIcon } from './icons/SupabaseIcon';
 import { GenericApiIcon } from './icons/GenericApiIcon';
 import { AgentCreationModal } from './AgentCreationModal';
 // FIX: Added Service to the import from the central types file.
-import { CustomAgent, Playbook, AgentPreferences, AgentRole, TodoItem, Service, ModelProviderConfig } from '../types';
+import { CustomAgent, Playbook, AgentPreferences, AgentRole, TodoItem, Service, ModelProviderConfig, McpServer, McpAuthType } from '../types';
 import { PencilIcon } from './icons/PencilIcon';
 import { TrashIcon } from './icons/TrashIcon';
 import { PlusIcon } from './icons/PlusIcon';
@@ -42,6 +42,8 @@ import { CodeSandboxIcon } from './icons/CodeSandboxIcon';
 import { ServerIcon } from './icons/ServerIcon';
 // FIX: Import missing ChevronDownIcon.
 import { ChevronDownIcon } from './icons/ChevronDownIcon';
+import { discoverServer, getMcpServers, runMcpHealthChecks, saveMcpServers } from '../services/mcpClient';
+import { refreshMcpToolRegistry } from '../services/tools';
 
 
 interface MasterConfigurationPanelProps {
@@ -251,6 +253,17 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
         } catch (e) { console.error(e); }
         return initialModelProviders;
     });
+
+    const [mcpServers, setMcpServers] = useState<McpServer[]>(() => getMcpServers());
+    const [newMcpServer, setNewMcpServer] = useState({
+        name: '',
+        url: '',
+        authType: 'none' as McpAuthType,
+        token: '',
+        headerName: 'X-API-Key',
+        timeoutMs: 8000,
+        retryCount: 1,
+    });
     
     const [agents, setAgents] = useState<CustomAgent[]>(() => {
         let savedAgents: CustomAgent[] = [];
@@ -351,6 +364,11 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
         } catch (e) { console.error(e); }
     }, [modelProviders]);
 
+    useEffect(() => {
+        saveMcpServers(mcpServers);
+        refreshMcpToolRegistry().catch(error => console.error('Failed to refresh MCP tool registry', error));
+    }, [mcpServers]);
+
     const availableAgentNames = useMemo(() => {
         const customAgentNames = agents.filter(a => !a.isCore).map(a => a.name);
         return [...new Set([...defaultAgentModels, ...customAgentNames])];
@@ -397,6 +415,46 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
         console.log(`Disconnecting service ${serviceId}`);
         setServices(prev => prev.map(s => s.id === serviceId ? { ...s, status: 'Not Connected' } : s));
         setSelectedService(null);
+    };
+
+    const handleAddMcpServer = async () => {
+        if (!newMcpServer.name.trim() || !newMcpServer.url.trim()) return;
+
+        const draft: McpServer = {
+            id: `mcp-${Date.now()}`,
+            name: newMcpServer.name.trim(),
+            url: newMcpServer.url.trim(),
+            auth: {
+                type: newMcpServer.authType,
+                token: newMcpServer.token || undefined,
+                headerName: newMcpServer.authType === 'header' ? newMcpServer.headerName : undefined,
+            },
+            timeoutMs: newMcpServer.timeoutMs,
+            retryCount: newMcpServer.retryCount,
+            status: 'unknown',
+            capabilities: [],
+        };
+
+        const discovered = await discoverServer(draft);
+        setMcpServers(prev => [...prev, discovered]);
+        setNewMcpServer({
+            name: '',
+            url: '',
+            authType: 'none',
+            token: '',
+            headerName: 'X-API-Key',
+            timeoutMs: 8000,
+            retryCount: 1,
+        });
+    };
+
+    const handleRemoveMcpServer = (serverId: string) => {
+        setMcpServers(prev => prev.filter(server => server.id !== serverId));
+    };
+
+    const handleMcpHealthCheck = async () => {
+        const updated = await runMcpHealthChecks(mcpServers);
+        setMcpServers(updated);
     };
 
     const handleOpenAgentModal = (agent: CustomAgent | null = null) => {
@@ -731,6 +789,55 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
                                 <PlusIcon className="w-5 h-5" />
                                 Add New Provider
                             </button>
+                        </Section>
+
+                        <Section title="MCP Server Management" icon={<ServerIcon className="w-5 h-5" />} defaultOpen>
+                            <div className="space-y-3">
+                                {mcpServers.map(server => (
+                                    <div key={server.id} className="bg-black/5 dark:bg-white/5 p-3 rounded-lg">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div>
+                                                <p className="font-semibold text-zinc-800 dark:text-white">{server.name}</p>
+                                                <p className="text-xs text-gray-500 dark:text-gray-400">{server.url}</p>
+                                                <p className="text-xs mt-1 text-gray-500 dark:text-gray-400">Auth: {server.auth.type}</p>
+                                                <div className="flex flex-wrap gap-2 mt-2">
+                                                    {(server.capabilities.length > 0 ? server.capabilities : ['no-capabilities']).map(capability => (
+                                                        <span key={capability} className="px-2 py-0.5 rounded-full text-xs bg-black/10 dark:bg-white/10 text-gray-700 dark:text-gray-300">{capability}</span>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                            <div className="text-right">
+                                                <span className={`text-xs font-bold ${server.status === 'connected' ? 'text-green-500' : server.status === 'degraded' ? 'text-amber-500' : 'text-gray-500'}`}>{server.status}</span>
+                                                <p className="text-[10px] text-gray-500 mt-1">{server.lastCheckedAt ? new Date(server.lastCheckedAt).toLocaleString() : 'never checked'}</p>
+                                                <button onClick={() => handleRemoveMcpServer(server.id)} className="mt-2 text-xs text-red-500 hover:text-red-400">Remove</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                <input value={newMcpServer.name} onChange={e => setNewMcpServer(prev => ({ ...prev, name: e.target.value }))} placeholder="Server name" className="bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg px-3 py-2 text-sm" />
+                                <input value={newMcpServer.url} onChange={e => setNewMcpServer(prev => ({ ...prev, url: e.target.value }))} placeholder="https://mcp.example.com" className="bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg px-3 py-2 text-sm" />
+                                <select value={newMcpServer.authType} onChange={e => setNewMcpServer(prev => ({ ...prev, authType: e.target.value as McpAuthType }))} className="bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg px-3 py-2 text-sm">
+                                    <option value="none">No auth</option>
+                                    <option value="bearer">Bearer token</option>
+                                    <option value="header">Custom header</option>
+                                </select>
+                                {(newMcpServer.authType === 'bearer' || newMcpServer.authType === 'header') && (
+                                    <input value={newMcpServer.token} onChange={e => setNewMcpServer(prev => ({ ...prev, token: e.target.value }))} placeholder="Token / secret" className="bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg px-3 py-2 text-sm" />
+                                )}
+                                {newMcpServer.authType === 'header' && (
+                                    <input value={newMcpServer.headerName} onChange={e => setNewMcpServer(prev => ({ ...prev, headerName: e.target.value }))} placeholder="Header name" className="bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg px-3 py-2 text-sm" />
+                                )}
+                                <input type="number" value={newMcpServer.timeoutMs} onChange={e => setNewMcpServer(prev => ({ ...prev, timeoutMs: Number(e.target.value) }))} placeholder="Timeout (ms)" className="bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg px-3 py-2 text-sm" />
+                                <input type="number" value={newMcpServer.retryCount} onChange={e => setNewMcpServer(prev => ({ ...prev, retryCount: Number(e.target.value) }))} placeholder="Retries" className="bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg px-3 py-2 text-sm" />
+                            </div>
+
+                            <div className="mt-3 flex gap-2">
+                                <button onClick={handleAddMcpServer} className="flex-1 bg-cyan-600 dark:bg-[#00D4FF] hover:bg-cyan-700 dark:hover:bg-cyan-400 text-white dark:text-black font-semibold py-2 px-4 rounded-lg text-sm">Add & Discover</button>
+                                <button onClick={handleMcpHealthCheck} className="flex-1 bg-black/10 dark:bg-white/10 hover:bg-black/20 dark:hover:bg-white/20 text-zinc-800 dark:text-white font-semibold py-2 px-4 rounded-lg text-sm">Health Check All</button>
+                            </div>
                         </Section>
                         
                         {Object.entries(categorizedServices).map(([category, serviceList]) => serviceList.length > 0 && (
