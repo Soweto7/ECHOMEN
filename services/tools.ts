@@ -1,5 +1,6 @@
 import { FunctionDeclaration, Type } from "@google/genai";
 import { Service } from '../types';
+import { appendImmutableAuditLog, enforceCommandPolicy, enforceDomainPolicy, enforcePathPolicy, redactSensitiveData } from './security';
 
 const BACKEND_URL = 'http://localhost:3001/execute-tool';
 
@@ -30,7 +31,7 @@ const callBackendTool = async (toolName: string, args: object): Promise<any> => 
         const result = await response.json();
         return result.result;
     } catch (error) {
-        console.error(`Error calling backend for tool '${toolName}':`, error);
+        console.error(`Error calling backend for tool '${toolName}'.`);
         if (error instanceof Error) {
             throw new Error(`Failed to execute '${toolName}': ${error.message}. Is the ECHO Execution Engine running?`);
         }
@@ -45,10 +46,10 @@ const checkAuth = (serviceId: string): boolean => {
         if (savedServicesJSON) {
             const services: Partial<Service>[] = JSON.parse(savedServicesJSON);
             const service = services.find(s => s.id === serviceId);
-            return service?.status === 'Connected';
+            return service?.status === 'Connected' && service?.validatedByBackend === true;
         }
-    } catch (e) {
-        console.error("Could not check auth status", e);
+    } catch {
+        return false;
     }
     return false;
 }
@@ -67,10 +68,10 @@ const getSandboxToolRunner = (operation: string, args: object) => {
 
 // --- Tool Implementations ---
 
-const readFile = (path: string): Promise<string> => getSandboxToolRunner('readFile', { path });
-const writeFile = (path: string, content: string): Promise<string> => getSandboxToolRunner('writeFile', { path, content });
-const listFiles = (path: string): Promise<string[]> => getSandboxToolRunner('listFiles', { path });
-const executeShellCommand = (command: string): Promise<string> => getSandboxToolRunner('executeShellCommand', { command });
+const readFile = (path: string): Promise<string> => { enforcePathPolicy(path); return getSandboxToolRunner('readFile', { path }); };
+const writeFile = (path: string, content: string): Promise<string> => { enforcePathPolicy(path); return getSandboxToolRunner('writeFile', { path, content }); };
+const listFiles = (path: string): Promise<string[]> => { enforcePathPolicy(path); return getSandboxToolRunner('listFiles', { path }); };
+const executeShellCommand = (command: string): Promise<string> => { enforceCommandPolicy(command); return getSandboxToolRunner('executeShellCommand', { command }); };
 
 
 const browse_web = async (url: string, task_description: string): Promise<string> => {
@@ -78,6 +79,7 @@ const browse_web = async (url: string, task_description: string): Promise<string
     // if (!checkAuth('tavily')) {
     //     throw new Error("Web browsing requires a connected service like Tavily.");
     // }
+    enforceDomainPolicy(url);
     return callBackendTool('browse_web', { url, task_description });
 };
 
@@ -135,16 +137,19 @@ const github_create_repo = async (name: string, description: string, is_private:
 
 const github_get_pr_details = async (pr_url: string): Promise<any> => {
     if (!checkAuth('github')) throw new Error("GitHub service not connected.");
+    enforceDomainPolicy(pr_url);
     return callBackendTool('github_get_pr_details', { pr_url });
 };
 
 const github_post_pr_comment = async (pr_url: string, comment: string): Promise<any> => {
     if (!checkAuth('github')) throw new Error("GitHub service not connected.");
+    enforceDomainPolicy(pr_url);
     return callBackendTool('github_post_pr_comment', { pr_url, comment });
 };
 
 const github_merge_pr = async (pr_url: string, method: 'merge' | 'squash' | 'rebase'): Promise<any> => {
     if (!checkAuth('github')) throw new Error("GitHub service not connected.");
+    enforceDomainPolicy(pr_url);
     return callBackendTool('github_merge_pr', { pr_url, method });
 };
 
@@ -157,21 +162,21 @@ const github_create_file_in_repo = async (repo_name: string, path: string, conte
 // --- Memory Tools (Supabase Integration) ---
 
 const memory_save = async (key: string, value: string, tags: string[]): Promise<string> => {
-    if (!checkAuth(\'supabase\')) throw new Error("Supabase service not connected for memory operations.");
-    return callBackendTool(\'memory_save\', { key, value, tags });
+    if (!checkAuth('supabase')) throw new Error("Supabase service not connected for memory operations.");
+    return callBackendTool('memory_save', { key, value, tags });
 };
 
 const memory_retrieve = async (key?: string, tags?: string[]): Promise<string> => {
-    if (!checkAuth(\'supabase\')) throw new Error("Supabase service not connected for memory operations.");
+    if (!checkAuth('supabase')) throw new Error("Supabase service not connected for memory operations.");
     if (!key && (!tags || tags.length === 0)) {
-        throw new Error("Must provide either a \'key\' or \'tags\' to retrieve memory.");
+        throw new Error("Must provide either a 'key' or 'tags' to retrieve memory.");
     }
-    return callBackendTool(\'memory_retrieve\', { key, tags });
+    return callBackendTool('memory_retrieve', { key, tags });
 };
 
 const memory_delete = async (key: string): Promise<string> => {
-    if (!checkAuth(\'supabase\')) throw new Error("Supabase service not connected for memory operations.");
-    return callBackendTool(\'memory_delete\', { key });
+    if (!checkAuth('supabase')) throw new Error("Supabase service not connected for memory operations.");
+    return callBackendTool('memory_delete', { key });
 };
 
 const data_analyze = async (input_file_path: string, analysis_script: string): Promise<string> => {
@@ -399,24 +404,45 @@ export const toolDeclarations: FunctionDeclaration[] = [
     }
 ];
 
+const withAudit = (toolName: string, fn: (args: any) => Promise<any>) => async (args: any) => {
+    const safeArgs = redactSensitiveData(args);
+    appendImmutableAuditLog({ eventType: 'tool_call', source: toolName, status: 'attempt', payload: { args: safeArgs } });
+    try {
+        const result = await fn(args);
+        appendImmutableAuditLog({ eventType: 'tool_call', source: toolName, status: 'success', payload: { args: safeArgs, result: redactSensitiveData(result) } });
+        return result;
+    } catch (error) {
+        appendImmutableAuditLog({
+            eventType: 'tool_call',
+            source: toolName,
+            status: 'failure',
+            payload: {
+                args: safeArgs,
+                error: error instanceof Error ? error.message : String(error),
+            },
+        });
+        throw error;
+    }
+};
+
 export const availableTools: { [key: string]: (...args: any[]) => Promise<any> } = {
-    readFile: (args: { path: string }) => readFile(args.path),
-    writeFile: (args: { path: string; content: string }) => writeFile(args.path, args.content),
-    listFiles: (args: { path: string }) => listFiles(args.path),
-    executeShellCommand: (args: { command: string }) => executeShellCommand(args.command),
-    browse_web: (args: { url: string; task_description: string }) => browse_web(args.url, args.task_description),
-    executeCode: (args: { language: 'javascript', code: string }) => executeCode(args.language, args.code),
-    github_create_repo: (args: { name: string, description: string, is_private: boolean }) => github_create_repo(args.name, args.description, args.is_private),
-    github_get_pr_details: (args: { pr_url: string }) => github_get_pr_details(args.pr_url),
-    github_post_pr_comment: (args: { pr_url: string, comment: string }) => github_post_pr_comment(args.pr_url, args.comment),
-    github_merge_pr: (args: { pr_url: string, method: 'merge' | 'squash' | 'rebase' }) => github_merge_pr(args.pr_url, args.method),
-    github_create_file_in_repo: (args: { repo_name: string, path: string, content: string, commit_message: string }) => github_create_file_in_repo(args.repo_name, args.path, args.content, args.commit_message),
-    memory_save: (args: { key: string, value: string, tags: string[] }) => memory_save(args.key, args.value, args.tags),
-    memory_retrieve: (args: { key?: string, tags?: string[] }) => memory_retrieve(args.key, args.tags),
-    memory_delete: (args: { key: string }) => memory_delete(args.key),
-    data_analyze: (args: { input_file_path: string, analysis_script: string }) => data_analyze(args.input_file_path, args.analysis_script),
-    data_visualize: (args: { input_file_path: string, visualization_script: string, output_image_path: string }) => data_visualize(args.input_file_path, args.visualization_script, args.output_image_path),
-    createArtifact: (args: { title: string, type: 'code' | 'markdown' | 'live-preview', content: string }) => createArtifact(args.title, args.type, args.content),
-    create_and_delegate_task_to_new_agent: (args: { agent_name: string, agent_instructions: string, task_description: string, agent_icon: string }) => create_and_delegate_task_to_new_agent(args.agent_name, args.agent_instructions, args.task_description, args.agent_icon),
-    askUser: (args: { question: string }) => askUser(args.question),
+    readFile: withAudit('readFile', (args: { path: string }) => readFile(args.path)),
+    writeFile: withAudit('writeFile', (args: { path: string; content: string }) => writeFile(args.path, args.content)),
+    listFiles: withAudit('listFiles', (args: { path: string }) => listFiles(args.path)),
+    executeShellCommand: withAudit('executeShellCommand', (args: { command: string }) => executeShellCommand(args.command)),
+    browse_web: withAudit('browse_web', (args: { url: string; task_description: string }) => browse_web(args.url, args.task_description)),
+    executeCode: withAudit('executeCode', (args: { language: 'javascript', code: string }) => executeCode(args.language, args.code)),
+    github_create_repo: withAudit('github_create_repo', (args: { name: string, description: string, is_private: boolean }) => github_create_repo(args.name, args.description, args.is_private)),
+    github_get_pr_details: withAudit('github_get_pr_details', (args: { pr_url: string }) => github_get_pr_details(args.pr_url)),
+    github_post_pr_comment: withAudit('github_post_pr_comment', (args: { pr_url: string, comment: string }) => github_post_pr_comment(args.pr_url, args.comment)),
+    github_merge_pr: withAudit('github_merge_pr', (args: { pr_url: string, method: 'merge' | 'squash' | 'rebase' }) => github_merge_pr(args.pr_url, args.method)),
+    github_create_file_in_repo: withAudit('github_create_file_in_repo', (args: { repo_name: string, path: string, content: string, commit_message: string }) => github_create_file_in_repo(args.repo_name, args.path, args.content, args.commit_message)),
+    memory_save: withAudit('memory_save', (args: { key: string, value: string, tags: string[] }) => memory_save(args.key, args.value, args.tags)),
+    memory_retrieve: withAudit('memory_retrieve', (args: { key?: string, tags?: string[] }) => memory_retrieve(args.key, args.tags)),
+    memory_delete: withAudit('memory_delete', (args: { key: string }) => memory_delete(args.key)),
+    data_analyze: withAudit('data_analyze', (args: { input_file_path: string, analysis_script: string }) => data_analyze(args.input_file_path, args.analysis_script)),
+    data_visualize: withAudit('data_visualize', (args: { input_file_path: string, visualization_script: string, output_image_path: string }) => data_visualize(args.input_file_path, args.visualization_script, args.output_image_path)),
+    createArtifact: withAudit('createArtifact', (args: { title: string, type: 'code' | 'markdown' | 'live-preview', content: string }) => createArtifact(args.title, args.type, args.content)),
+    create_and_delegate_task_to_new_agent: withAudit('create_and_delegate_task_to_new_agent', (args: { agent_name: string, agent_instructions: string, task_description: string, agent_icon: string }) => create_and_delegate_task_to_new_agent(args.agent_name, args.agent_instructions, args.task_description, args.agent_icon)),
+    askUser: withAudit('askUser', (args: { question: string }) => askUser(args.question)),
 };

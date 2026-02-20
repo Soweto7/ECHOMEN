@@ -1,6 +1,7 @@
 import { Task, LogEntry, SubStep, ToolCall, Artifact, CustomAgent } from '../types';
 import { determineNextStep } from './planner';
 import { availableTools } from './tools';
+import { redactLogMessage, redactSensitiveData } from './security';
 
 const MAX_SUB_STEPS = 10;
 
@@ -304,7 +305,7 @@ export class AgentExecutor {
                     taskId: task.id,
                     title: toolCall.args.title,
                     type: toolCall.args.type,
-                    content: toolCall.args.content
+                    content: typeof toolCall.args.content === 'string' ? redactLogMessage(toolCall.args.content) : toolCall.args.content
                 };
                 this.callbacks.onArtifactCreated(newArtifactData);
                  this.currentArtifacts.push({
@@ -321,7 +322,7 @@ export class AgentExecutor {
                         taskId: task.id,
                         title: `Execution Result: ${language}`,
                         type: 'live-preview' as const,
-                        content: JSON.stringify({ code, result })
+                        content: JSON.stringify(redactSensitiveData({ code, result }))
                     };
                     this.callbacks.onArtifactCreated(newArtifactData);
                     this.currentArtifacts.push({
@@ -341,14 +342,16 @@ export class AgentExecutor {
 
                 if (toolImplementation) {
                     try {
-                        this.callbacks.onLog({ status: 'INFO', message: `[${task.agent.name}] Using tool: ${toolCall.name} with args: ${JSON.stringify(toolCall.args)}` });
+                        const safeToolArgs = redactSensitiveData(toolCall.args);
+                        this.callbacks.onLog({ status: 'INFO', message: redactLogMessage(`[${task.agent.name}] Using tool: ${toolCall.name} with args: ${JSON.stringify(safeToolArgs)}`) });
                         const result = await toolImplementation(toolCall.args);
-                        observation = typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result);
-                        this.callbacks.onLog({ status: 'SUCCESS', message: `[Tool] ${toolCall.name} returned: ${observation.substring(0, 100)}...` });
+                        const safeResult = redactSensitiveData(result);
+                        observation = typeof safeResult === 'object' ? JSON.stringify(safeResult, null, 2) : String(safeResult);
+                        this.callbacks.onLog({ status: 'SUCCESS', message: redactLogMessage(`[Tool] ${toolCall.name} returned: ${observation.substring(0, 100)}...`) });
                     } catch (e) {
                         const toolError = e instanceof Error ? e.message : String(e);
                         observation = `Error executing tool ${toolCall.name}: ${toolError}`;
-                        this.callbacks.onLog({ status: 'ERROR', message: `[Tool] ${observation}` });
+                        this.callbacks.onLog({ status: 'ERROR', message: redactLogMessage(`[Tool] ${observation}`) });
                         throw new Error(observation);
                     }
                 } else {
