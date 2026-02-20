@@ -50,6 +50,17 @@ interface MasterConfigurationPanelProps {
     setTheme: (theme: 'light' | 'dark') => void;
 }
 
+const normalizePlaybook = (playbook: Playbook): Playbook => ({
+    ...playbook,
+    version: playbook.version ?? 1,
+    createdFromRunId: playbook.createdFromRunId ?? 'legacy-run',
+    successRate: playbook.successRate ?? 0,
+    runCount: playbook.runCount ?? 0,
+    successCount: playbook.successCount ?? 0,
+    retrievalBoost: playbook.retrievalBoost ?? 0,
+    isArchived: playbook.isArchived ?? false,
+});
+
 const initialServices: Service[] = [
     // Sandbox Environments
     { id: 'daytona', name: 'Daytona', icon: <DaytonaIcon className="w-6 h-6" />, inputs: [{ id: 'apiKey', label: 'API Key', type: 'password', placeholder: 'dt...' }], status: 'Not Connected' },
@@ -303,7 +314,7 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
                 // FIX: Use a type guard to safely parse playbooks from localStorage.
                 const parsed = JSON.parse(savedPlaybooksJSON);
                 if (Array.isArray(parsed)) {
-                    setPlaybooks(parsed as Playbook[]);
+                    setPlaybooks((parsed as Playbook[]).map(normalizePlaybook));
                 }
             }
         } catch (error) {
@@ -433,6 +444,18 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
     
     const handleDeletePlaybook = (id: string) => {
         setPlaybooks(prev => prev.filter(p => p.id !== id));
+    };
+
+    const handlePromotePlaybook = (id: string) => {
+        setPlaybooks(prev => prev.map(p => p.id === id ? { ...p, retrievalBoost: (p.retrievalBoost ?? 0) + 10 } : p));
+    };
+
+    const handleDemotePlaybook = (id: string) => {
+        setPlaybooks(prev => prev.map(p => p.id === id ? { ...p, retrievalBoost: Math.max(-50, (p.retrievalBoost ?? 0) - 10) } : p));
+    };
+
+    const handleToggleArchivePlaybook = (id: string) => {
+        setPlaybooks(prev => prev.map(p => p.id === id ? { ...p, isArchived: !p.isArchived } : p));
     };
 
     const handleClearAllPlaybooks = () => {
@@ -589,16 +612,22 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
                         
                         <Section title="Cognitive Core: Learned Playbooks" icon={<BrainIcon className="w-5 h-5" />}>
                             <div className="space-y-2 max-h-64 overflow-y-auto pr-2">
-                                {Array.isArray(playbooks) && playbooks.map(playbook => (
+                                {Array.isArray(playbooks) && [...playbooks].sort((a, b) => (b.successRate - a.successRate) || ((b.retrievalBoost ?? 0) - (a.retrievalBoost ?? 0))).map(playbook => (
                                     <div key={playbook.id} className="bg-black/5 dark:bg-white/5 p-3 rounded-lg">
                                         <div className="flex items-start justify-between">
                                             <div>
                                                 <p className="font-semibold text-zinc-800 dark:text-white">{playbook.name}</p>
                                                 <p className="text-sm text-gray-600 dark:text-gray-300 mt-1">{playbook.description}</p>
                                                 <p className="text-xs text-gray-500 dark:text-gray-400 italic mt-2">Learned from: "{playbook.triggerPrompt}"</p>
-                                                 <p className="text-xs text-gray-500 mt-2">{new Date(playbook.createdAt).toLocaleString()}</p>
+                                                <p className="text-xs text-gray-500 mt-1">Version v{playbook.version} • Success {playbook.successRate.toFixed(1)}% ({playbook.successCount}/{playbook.runCount})</p>
+                                                <p className="text-xs text-gray-500 mt-1">Run: {playbook.createdFromRunId} • Boost: {playbook.retrievalBoost}</p>
+                                                <p className="text-xs text-gray-500 mt-2">{new Date(playbook.createdAt).toLocaleString()}</p>
+                                                {playbook.isArchived && <p className="text-xs text-amber-600 dark:text-amber-400 mt-1 font-semibold">Archived</p>}
                                             </div>
-                                            <div className="flex items-center gap-3 flex-shrink-0 ml-4">
+                                            <div className="flex items-center gap-2 flex-shrink-0 ml-4">
+                                                <button onClick={() => handlePromotePlaybook(playbook.id)} title="Promote" className="text-gray-500 dark:text-gray-400 hover:text-emerald-500 text-xs">Promote</button>
+                                                <button onClick={() => handleDemotePlaybook(playbook.id)} title="Demote" className="text-gray-500 dark:text-gray-400 hover:text-amber-500 text-xs">Demote</button>
+                                                <button onClick={() => handleToggleArchivePlaybook(playbook.id)} title={playbook.isArchived ? 'Unarchive' : 'Archive'} className="text-gray-500 dark:text-gray-400 hover:text-violet-500 text-xs">{playbook.isArchived ? 'Restore' : 'Archive'}</button>
                                                 <button onClick={() => handleDeletePlaybook(playbook.id)} title="Delete" className="text-gray-500 dark:text-gray-400 hover:text-red-500"><TrashIcon className="w-4 h-4" /></button>
                                             </div>
                                         </div>
