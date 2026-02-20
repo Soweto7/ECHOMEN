@@ -1,6 +1,7 @@
 import { Task, LogEntry, SubStep, ToolCall, Artifact, CustomAgent } from '../types';
 import { determineNextStep } from './planner';
 import { availableTools } from './tools';
+import { enforceSkillPermissions, getSkillRuntimeContext } from './skills';
 
 const MAX_SUB_STEPS = 10;
 
@@ -341,6 +342,10 @@ export class AgentExecutor {
 
                 if (toolImplementation) {
                     try {
+                        const permissionCheck = enforceSkillPermissions(getSkillRuntimeContext(), toolCall.name);
+                        if (!permissionCheck.allowed) {
+                            throw new Error(permissionCheck.reason || 'Blocked by skill permissions.');
+                        }
                         this.callbacks.onLog({ status: 'INFO', message: `[${task.agent.name}] Using tool: ${toolCall.name} with args: ${JSON.stringify(toolCall.args)}` });
                         const result = await toolImplementation(toolCall.args);
                         observation = typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result);

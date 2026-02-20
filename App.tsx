@@ -13,6 +13,8 @@ import { ExecutionStatusBar } from './components/ExecutionStatusBar';
 import { AgentExecutor } from './services/agentExecutor';
 import { ArtifactsPanel } from './components/ArtifactsPanel';
 import { PlaybookCreationModal } from './components/PlaybookCreationModal';
+import { getSkillRuntimeContext } from './services/skills';
+import { recordSkillTelemetry } from './services/skillTelemetry';
 
 const App: React.FC = () => {
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -31,6 +33,7 @@ const App: React.FC = () => {
     const [commandCenterInput, setCommandCenterInput] = useState<string>('');
     const [sessionStats, setSessionStats] = useState<SessionStats>({ totalTokensUsed: 0 });
     const [playbookCandidate, setPlaybookCandidate] = useState<{ suggestedName: string; tasks: Task[]; triggerPrompt: string } | null>(null);
+    const runStartRef = useRef<number>(0);
 
     const executorRef = useRef<AgentExecutor | null>(null);
 
@@ -145,6 +148,7 @@ const App: React.FC = () => {
         setArtifacts([]);
         setCurrentPrompt(prompt);
         setAgentStatus(AgentStatus.RUNNING);
+        runStartRef.current = Date.now();
 
         addLog({ status: 'INFO', message: `User command received: "${prompt}"` });
 
@@ -170,6 +174,7 @@ const App: React.FC = () => {
                 playbooks,
                 customAgents,
                 activeTodos: todos.filter(t => !t.isCompleted),
+                activeSkills: getSkillRuntimeContext().enabledSkills.map((skill) => skill.name),
             };
 
             const initialTasks = await createInitialPlan(correctedPrompt, isWebToolActive, executionContext, handleTokenUpdate);
@@ -194,10 +199,26 @@ const App: React.FC = () => {
                 onAgentCreated: handleAgentCreated,
                 onFinish: () => {
                     addLog({ status: 'SUCCESS', message: 'ECHO: All tasks completed successfully.' });
+                    recordSkillTelemetry({
+                        timestamp: new Date().toISOString(),
+                        prompt: correctedPrompt,
+                        skills: getSkillRuntimeContext().enabledSkills.map((skill) => skill.name),
+                        completed: true,
+                        latencyMs: Date.now() - runStartRef.current,
+                        tokenCost: sessionStats.totalTokensUsed,
+                    });
                     setAgentStatus(AgentStatus.FINISHED);
                 },
                 onFail: (errorMessage) => {
                     addLog({ status: 'ERROR', message: `ECHO: Execution failed. ${errorMessage}` });
+                    recordSkillTelemetry({
+                        timestamp: new Date().toISOString(),
+                        prompt: correctedPrompt,
+                        skills: getSkillRuntimeContext().enabledSkills.map((skill) => skill.name),
+                        completed: false,
+                        latencyMs: Date.now() - runStartRef.current,
+                        tokenCost: sessionStats.totalTokensUsed,
+                    });
                     setAgentStatus(AgentStatus.ERROR);
                 }
             });

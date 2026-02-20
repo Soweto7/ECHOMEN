@@ -208,6 +208,7 @@ interface ExecutionContext {
     playbooks: Playbook[];
     customAgents: CustomAgent[];
     activeTodos: TodoItem[];
+    activeSkills?: string[];
 }
 
 export const createInitialPlan = async (
@@ -241,6 +242,7 @@ export const createInitialPlan = async (
 - Available Custom Agents: ${context.customAgents.length > 0 ? context.customAgents.map(a => a.name).join(', ') : 'None'}
 - Learned Playbooks: ${context.playbooks.length}
 - High-Priority To-Dos: ${context.activeTodos.length > 0 ? context.activeTodos.map(t => t.text).join('; ') : 'None'}
+- Active Skills: ${context.activeSkills && context.activeSkills.length > 0 ? context.activeSkills.join(', ') : 'None'}
 This context is for your awareness. Use it to create a more effective and informed plan.
 `;
 

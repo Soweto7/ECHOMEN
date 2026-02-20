@@ -1,0 +1,25 @@
+{
+  "name": "Community Web Research Skill",
+  "version": "0.3.0",
+  "capabilities": ["web_research", "planning"],
+  "required_tools": ["browse_web"],
+  "prompts": [
+    "Prefer primary sources and cite original URLs.",
+    "Cross-check contradictory claims before summarizing."
+  ],
+  "provenance": "third_party",
+  "enabled_by_default": false,
+  "signature": {
+    "algorithm": "simple-hash",
+    "value": "sig-334109254"
+  },
+  "policies": {
+    "permissions": {
+      "filesystem": false,
+      "shell": false,
+      "network": true,
+      "external_api": false,
+      "external_apis": []
+    }
+  }
+}
