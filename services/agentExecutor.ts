@@ -248,6 +248,14 @@ export class AgentExecutor {
 
             const nextStep = await determineNextStep(task, subSteps, this.currentArtifacts, this.callbacks.onTokenUpdate);
 
+            if (nextStep.providerUsage) {
+                const usage = nextStep.providerUsage;
+                this.callbacks.onLog({
+                    status: 'INFO',
+                    message: `[${task.agent.name}] Provider used: ${usage.provider} (${usage.model}) | ${usage.latencyMs}ms | cost ${usage.costTier} | health ${usage.healthScore}`
+                });
+            }
+
             if ('isFinished' in nextStep) {
                 this.callbacks.onLog({ status: 'INFO', message: `[${task.agent.name}] Concluding task with reason: ${nextStep.finalThought}` });
                 return;

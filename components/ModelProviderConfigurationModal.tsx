@@ -1,21 +1,27 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { CloseIcon } from './icons/CloseIcon';
-import { ModelProviderConfig } from '../types';
+import { ModelProviderConfig, ModelRoutingPreferences } from '../types';
 import { CpuChipIcon } from './icons/CpuChipIcon';
 
 interface ModelProviderConfigurationModalProps {
     providerConfig: ModelProviderConfig | null;
+    routingPreferences: ModelRoutingPreferences;
     isOpen: boolean;
     onClose: () => void;
     onSave: (provider: ModelProviderConfig) => void;
+    onSaveRoutingPreferences: (preferences: ModelRoutingPreferences) => void;
 }
 
-export const ModelProviderConfigurationModal: React.FC<ModelProviderConfigurationModalProps> = ({ providerConfig, isOpen, onClose, onSave }) => {
+const TASK_TYPES: Array<'planner' | 'chat' | 'execution' | 'review' | 'synthesis'> = ['planner', 'chat', 'execution', 'review', 'synthesis'];
+
+export const ModelProviderConfigurationModal: React.FC<ModelProviderConfigurationModalProps> = ({ providerConfig, routingPreferences, isOpen, onClose, onSave, onSaveRoutingPreferences }) => {
     const [formData, setFormData] = useState<Partial<ModelProviderConfig>>({});
+    const [localFirst, setLocalFirst] = useState(false);
 
     useEffect(() => {
         if (isOpen) {
+            setLocalFirst(routingPreferences.local_first);
             if (providerConfig) {
                 setFormData(providerConfig);
             } else {
@@ -25,15 +31,22 @@ export const ModelProviderConfigurationModal: React.FC<ModelProviderConfiguratio
                     type: 'LOCAL',
                     integration_layer: 'LANGCHAIN',
                     enabled: true,
-                    config: { model_name: '' }
+                    config: { model_name: '' },
+                    routing: {
+                        task_types: ['planner', 'execution'],
+                        fallback_order: 1,
+                        cost_tier: 'CHEAP',
+                        timeout_ms: 30000,
+                    },
                 });
             }
         }
-    }, [providerConfig, isOpen]);
+    }, [providerConfig, isOpen, routingPreferences.local_first]);
 
     const handleSave = () => {
         if (!formData.config?.model_name.trim()) return;
         onSave(formData as ModelProviderConfig);
+        onSaveRoutingPreferences({ local_first: localFirst });
     };
     
     const handleChange = (field: keyof ModelProviderConfig, value: any) => {
@@ -45,6 +58,21 @@ export const ModelProviderConfigurationModal: React.FC<ModelProviderConfiguratio
             ...prev,
             config: { ...prev.config, [field]: value }
         }));
+    };
+
+    const handleRoutingChange = (field: string, value: any) => {
+        setFormData(prev => ({
+            ...prev,
+            routing: { ...prev.routing, [field]: value }
+        }));
+    };
+
+    const toggleTaskType = (taskType: 'planner' | 'chat' | 'execution' | 'review' | 'synthesis') => {
+        const current = formData.routing?.task_types || [];
+        const next = current.includes(taskType)
+            ? current.filter(t => t !== taskType)
+            : [...current, taskType];
+        handleRoutingChange('task_types', next);
     };
 
     const isEditing = !!providerConfig;
@@ -80,6 +108,11 @@ export const ModelProviderConfigurationModal: React.FC<ModelProviderConfiguratio
                         </header>
 
                         <div className="flex-grow overflow-y-auto p-6 space-y-4">
+                            <div className="flex items-center justify-between rounded-lg border border-black/10 dark:border-white/10 p-3 bg-black/5 dark:bg-white/5">
+                                <span className="text-sm text-zinc-700 dark:text-gray-300">Global Local-First Routing</span>
+                                <input type="checkbox" checked={localFirst} onChange={(e) => setLocalFirst(e.target.checked)} />
+                            </div>
+
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Provider</label>
@@ -96,6 +129,42 @@ export const ModelProviderConfigurationModal: React.FC<ModelProviderConfiguratio
                                         <option>CLOUD</option>
                                     </select>
                                 </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Fallback Order</label>
+                                    <input type="number" value={formData.routing?.fallback_order ?? 1} min={1} onChange={(e) => handleRoutingChange('fallback_order', Number(e.target.value))} className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg px-3 py-2 text-zinc-800 dark:text-gray-200" />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Cost Tier</label>
+                                    <select value={formData.routing?.cost_tier || 'CHEAP'} onChange={(e) => handleRoutingChange('cost_tier', e.target.value)} className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg px-3 py-2 text-zinc-800 dark:text-gray-200">
+                                        <option value="CHEAP">CHEAP</option>
+                                        <option value="BALANCED">BALANCED</option>
+                                        <option value="STRONG">STRONG</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Task Routing Policy</label>
+                                <div className="flex flex-wrap gap-2">
+                                    {TASK_TYPES.map(taskType => (
+                                        <button
+                                            key={taskType}
+                                            type="button"
+                                            onClick={() => toggleTaskType(taskType)}
+                                            className={`px-3 py-1 rounded-full text-xs border ${formData.routing?.task_types?.includes(taskType) ? 'bg-cyan-600 text-white border-cyan-600 dark:bg-[#00D4FF] dark:text-black' : 'border-black/20 dark:border-white/20 text-zinc-700 dark:text-gray-300'}`}
+                                        >
+                                            {taskType}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Timeout (ms)</label>
+                                <input type="number" value={formData.routing?.timeout_ms ?? 30000} min={1000} onChange={(e) => handleRoutingChange('timeout_ms', Number(e.target.value))} className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg px-3 py-2 text-zinc-800 dark:text-gray-200" />
                             </div>
 
                             <div>

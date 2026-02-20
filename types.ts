@@ -170,4 +170,27 @@ export interface ModelProviderConfig {
   };
   integration_layer: 'NATIVE' | 'LANGCHAIN';
   enabled: boolean;
+  routing?: {
+    task_types?: Array<'planner' | 'chat' | 'execution' | 'review' | 'synthesis'>;
+    fallback_order?: number;
+    cost_tier?: 'CHEAP' | 'BALANCED' | 'STRONG';
+    timeout_ms?: number;
+  };
+  health?: {
+    success_count: number;
+    failure_count: number;
+    timeout_count: number;
+    total_latency_ms: number;
+    last_latency_ms?: number;
+    last_used_at?: string;
+  };
+}
+
+export interface ModelRoutingPreferences {
+  local_first: boolean;
+}
+
+export interface ModelProviderSettings {
+  providers: ModelProviderConfig[];
+  routing_preferences: ModelRoutingPreferences;
 }
