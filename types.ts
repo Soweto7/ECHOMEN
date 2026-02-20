@@ -144,6 +144,7 @@ export interface Service {
     icon: React.ReactNode;
     inputs: ServiceInput[];
     status: 'Connected' | 'Not Connected';
+    lastValidatedAt?: string;
 }
 
 export type ArtifactType = 'code' | 'markdown' | 'log' | 'live-preview';
