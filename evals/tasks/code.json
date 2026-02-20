@@ -1,0 +1,16 @@
+[
+  {
+    "id": "code-refactor-001",
+    "category": "code",
+    "prompt": "Refactor the provided TypeScript function to remove duplicated null checks while preserving behavior.",
+    "mustInclude": ["refactor", "TypeScript"],
+    "hallucinationTriggers": ["Python", "Ruby"]
+  },
+  {
+    "id": "code-debug-002",
+    "category": "code",
+    "prompt": "Identify the root cause of an async race condition in a React state update flow and propose a fix.",
+    "mustInclude": ["race condition", "React"],
+    "hallucinationTriggers": ["kernel panic", "database migration"]
+  }
+]

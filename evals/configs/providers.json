@@ -1,0 +1,23 @@
+[
+  {
+    "id": "openai-direct",
+    "provider": "openai",
+    "router": "direct",
+    "model": "gpt-4.1-mini",
+    "retries": 1
+  },
+  {
+    "id": "anthropic-router-a",
+    "provider": "anthropic",
+    "router": "router-a",
+    "model": "claude-3-5-sonnet",
+    "retries": 2
+  },
+  {
+    "id": "google-router-b",
+    "provider": "google",
+    "router": "router-b",
+    "model": "gemini-2.0-flash",
+    "retries": 1
+  }
+]
