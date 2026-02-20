@@ -35,7 +35,15 @@ const actionAnalysisSchema = {
     required: ["is_actionable", "suggested_prompt"]
 };
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY;
+
+if (!geminiApiKey) {
+    const errorMessage = "Missing Gemini API key. Please set VITE_GEMINI_API_KEY in your .env file before starting the app.";
+    console.error(errorMessage);
+    throw new Error(errorMessage);
+}
+
+const ai = new GoogleGenAI({ apiKey: geminiApiKey });
 let chat: Chat | null = null;
 
 const WELCOME_TRIGGERS = ['what can you do', 'help', 'explain yourself', 'what is this', 'hello', 'hi', 'what are you', 'who are you'];
