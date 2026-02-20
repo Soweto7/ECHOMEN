@@ -1,14 +1,19 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { CloseIcon } from './icons/CloseIcon';
-// FIX: Import Service from the central types file as it's used across the app.
 import { Service } from '../types';
+
+interface SaveServiceResult {
+    success: boolean;
+    message?: string;
+    fieldErrors?: { [key: string]: string };
+}
 
 interface ServiceConnectionModalProps {
     service: Service | null;
     isOpen: boolean;
     onClose: () => void;
-    onSave: (serviceId: string, values: { [key: string]: string }) => void;
+    onSave: (serviceId: string, values: { [key: string]: string }) => Promise<SaveServiceResult>;
     onDisconnect: (serviceId: string) => void;
 }
 
@@ -16,6 +21,8 @@ export const ServiceConnectionModal: React.FC<ServiceConnectionModalProps> = ({ 
     const [formState, setFormState] = useState<{ [key: string]: string }>({});
     const [errors, setErrors] = useState<{ [key: string]: string | null }>({});
     const [touched, setTouched] = useState<{ [key: string]: boolean }>({});
+    const [submitError, setSubmitError] = useState<string | null>(null);
+    const [isSaving, setIsSaving] = useState(false);
 
     useEffect(() => {
         if (service) {
@@ -26,6 +33,8 @@ export const ServiceConnectionModal: React.FC<ServiceConnectionModalProps> = ({ 
             setFormState(initialState);
             setErrors({});
             setTouched({});
+            setSubmitError(null);
+            setIsSaving(false);
         }
     }, [service]);
 
@@ -33,9 +42,9 @@ export const ServiceConnectionModal: React.FC<ServiceConnectionModalProps> = ({ 
         if (!value || value.trim() === '') {
             return 'This field is required.';
         }
-        if (id.toLowerCase().includes('key')) {
+        if (id.toLowerCase().includes('key') || id.toLowerCase().includes('token')) {
             if (value.trim().length < 10) {
-                return 'API Key must be at least 10 characters long.';
+                return 'Credential value must be at least 10 characters long.';
             }
         }
         if (id.toLowerCase().includes('url')) {
@@ -50,7 +59,7 @@ export const ServiceConnectionModal: React.FC<ServiceConnectionModalProps> = ({ 
     };
 
     const isSaveDisabled = useMemo(() => {
-        if (!service) return true;
+        if (!service || isSaving) return true;
         for (const input of service.inputs) {
             const value = formState[input.id] || '';
             if (validateInput(input.id, value)) {
@@ -58,23 +67,23 @@ export const ServiceConnectionModal: React.FC<ServiceConnectionModalProps> = ({ 
             }
         }
         return false;
-    }, [formState, service]);
-
+    }, [formState, service, isSaving]);
 
     const handleInputChange = (id: string, value: string) => {
         setFormState(prev => ({ ...prev, [id]: value }));
+        setSubmitError(null);
         if (touched[id]) {
             setErrors(prev => ({ ...prev, [id]: validateInput(id, value) }));
         }
     };
-    
+
     const handleBlur = (id: string) => {
         setTouched(prev => ({ ...prev, [id]: true }));
         setErrors(prev => ({ ...prev, [id]: validateInput(id, formState[id] || '') }));
     };
 
-    const handleSave = () => {
-        if (isSaveDisabled) return;
+    const handleSave = async () => {
+        if (!service || isSaveDisabled) return;
 
         let hasErrors = false;
         const newErrors: { [key: string]: string | null } = {};
@@ -92,15 +101,40 @@ export const ServiceConnectionModal: React.FC<ServiceConnectionModalProps> = ({ 
         setErrors(newErrors);
         setTouched(newTouched);
 
-        if (!hasErrors) {
-            onSave(service.id, formState);
+        if (hasErrors) return;
+
+        setIsSaving(true);
+        setSubmitError(null);
+        const result = await onSave(service.id, formState);
+        setIsSaving(false);
+
+        if (!result.success) {
+            if (result.fieldErrors) {
+                setErrors(prev => {
+                    const merged = { ...prev };
+                    Object.entries(result.fieldErrors || {}).forEach(([field, message]) => {
+                        merged[field] = message;
+                    });
+                    return merged;
+                });
+                setTouched(prev => {
+                    const merged = { ...prev };
+                    Object.keys(result.fieldErrors || {}).forEach(field => {
+                        merged[field] = true;
+                    });
+                    return merged;
+                });
+            }
+            setSubmitError(result.message || 'Validation failed. Please verify your credentials and try again.');
         }
     };
 
     const handleDisconnect = () => {
+        if (!service) return;
         onDisconnect(service.id);
+        setSubmitError(null);
     }
-    
+
     if (!service) return null;
 
     return (
@@ -124,7 +158,12 @@ export const ServiceConnectionModal: React.FC<ServiceConnectionModalProps> = ({ 
                         <header className="flex justify-between items-center mb-6">
                             <div className="flex items-center gap-3">
                                 <div className="text-[#8B5CF6]">{service.icon}</div>
-                                <h3 className="text-xl font-bold text-white">Connect to {service.name}</h3>
+                                <div>
+                                    <h3 className="text-xl font-bold text-white">Connect to {service.name}</h3>
+                                    <p className={`text-xs mt-1 ${service.status === 'Connected' ? 'text-green-400' : service.status === 'Connection Error' ? 'text-red-400' : 'text-gray-400'}`}>
+                                        Status: {service.status}
+                                    </p>
+                                </div>
                             </div>
                             <button onClick={onClose} className="text-gray-500 hover:text-white transition-colors">
                                 <CloseIcon className="w-6 h-6" />
@@ -137,12 +176,12 @@ export const ServiceConnectionModal: React.FC<ServiceConnectionModalProps> = ({ 
                                     <label htmlFor={input.id} className="block text-sm font-medium text-gray-400 mb-1">{input.label}</label>
                                     <div className="relative">
                                         <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center pointer-events-none">
-                                            <span 
+                                            <span
                                                 className={`w-2 h-2 rounded-full transition-colors ${
                                                     errors[input.id] && touched[input.id]
-                                                        ? 'bg-red-500' 
-                                                        : formState[input.id] && !errors[input.id] 
-                                                        ? 'bg-green-500' 
+                                                        ? 'bg-red-500'
+                                                        : formState[input.id] && !errors[input.id]
+                                                        ? 'bg-green-500'
                                                         : 'bg-gray-500'
                                                 }`}
                                             />
@@ -155,8 +194,8 @@ export const ServiceConnectionModal: React.FC<ServiceConnectionModalProps> = ({ 
                                             onBlur={() => handleBlur(input.id)}
                                             placeholder={input.placeholder}
                                             className={`w-full bg-black/40 border rounded-lg px-3 py-2 pl-8 text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 transition-colors ${
-                                                errors[input.id] && touched[input.id] 
-                                                ? 'border-red-500/50 focus:ring-red-500/50' 
+                                                errors[input.id] && touched[input.id]
+                                                ? 'border-red-500/50 focus:ring-red-500/50'
                                                 : 'border-white/10 focus:ring-[#8B5CF6]/50'
                                             }`}
                                         />
@@ -167,6 +206,12 @@ export const ServiceConnectionModal: React.FC<ServiceConnectionModalProps> = ({ 
                                 </div>
                             ))}
                         </div>
+
+                        {submitError && (
+                            <p className="mt-4 text-sm text-red-300 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2">
+                                {submitError}
+                            </p>
+                        )}
 
                         <footer className="mt-8 flex justify-between items-center">
                              {service.status === 'Connected' ? (
@@ -182,7 +227,7 @@ export const ServiceConnectionModal: React.FC<ServiceConnectionModalProps> = ({ 
                                 disabled={isSaveDisabled}
                                 className="bg-[#8B5CF6] hover:bg-[#7c4ee3] text-white font-bold py-2 px-6 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                                {service.status === 'Connected' ? 'Save Changes' : 'Save Connection'}
+                                {isSaving ? 'Validating…' : service.status === 'Connected' ? 'Save Changes' : 'Save Connection'}
                             </button>
                         </footer>
                     </motion.div>
