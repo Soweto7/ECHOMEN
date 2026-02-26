@@ -126,7 +126,7 @@ export const ModelProviderConfigurationModal: React.FC<ModelProviderConfiguratio
                                     type="text"
                                     value={formData.config?.api_key_env_var || ''}
                                     onChange={(e) => handleConfigChange('api_key_env_var', e.target.value)}
-                                    placeholder="e.g., GEMINI_API_KEY"
+                                    placeholder="e.g., VITE_GEMINI_API_KEY"
                                     className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg px-3 py-2 text-zinc-800 dark:text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-600/50 dark:focus:ring-[#00D4FF]/50"
                                 />
                             </div>

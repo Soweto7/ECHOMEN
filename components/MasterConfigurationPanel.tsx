@@ -116,7 +116,7 @@ const initialModelProviders: ModelProviderConfig[] = [
     description: 'Primary high-speed, multi-modal model for core reasoning and tool use.',
     config: {
       model_name: 'gemini-2.5-flash',
-      api_key_env_var: 'GEMINI_API_KEY'
+      api_key_env_var: 'VITE_GEMINI_API_KEY'
     },
     integration_layer: 'NATIVE',
     enabled: true
