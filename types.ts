@@ -171,3 +171,9 @@ export interface ModelProviderConfig {
   integration_layer: 'NATIVE' | 'LANGCHAIN';
   enabled: boolean;
 }
+
+export interface ToolExecutionPolicy {
+  allowedPaths: string[];
+  blockedCommands: string[];
+  allowedDomains: string[];
+}

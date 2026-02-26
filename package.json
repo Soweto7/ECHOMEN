@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "backend": "node --experimental-strip-types backend/server.ts"
   },
   "dependencies": {
     "react": "^19.2.0",

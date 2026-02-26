@@ -14,7 +14,7 @@ import { SupabaseIcon } from './icons/SupabaseIcon';
 import { GenericApiIcon } from './icons/GenericApiIcon';
 import { AgentCreationModal } from './AgentCreationModal';
 // FIX: Added Service to the import from the central types file.
-import { CustomAgent, Playbook, AgentPreferences, AgentRole, TodoItem, Service, ModelProviderConfig } from '../types';
+import { CustomAgent, Playbook, AgentPreferences, AgentRole, TodoItem, Service, ModelProviderConfig, ToolExecutionPolicy } from '../types';
 import { PencilIcon } from './icons/PencilIcon';
 import { TrashIcon } from './icons/TrashIcon';
 import { PlusIcon } from './icons/PlusIcon';
@@ -92,6 +92,13 @@ const initialServices: Service[] = [
     { id: 'serper', name: 'Serper.dev', icon: <GenericApiIcon className="w-6 h-6" />, inputs: [{ id: 'apiKey', label: 'API Key', type: 'password', placeholder: '...' }], status: 'Not Connected' },
     { id: 'agentops', name: 'Agentops.ai', icon: <GenericApiIcon className="w-6 h-6" />, inputs: [{ id: 'apiKey', label: 'API Key', type: 'password', placeholder: '...' }, { id: 'apiUrl', label: 'Endpoint URL (Optional)', type: 'text', placeholder: 'https://api.agentops.ai' }], status: 'Not Connected' },
 ];
+
+
+const defaultToolExecutionPolicy: ToolExecutionPolicy = {
+    allowedPaths: ['./workspace', './tmp'],
+    blockedCommands: ['rm -rf /', 'shutdown', 'reboot', 'mkfs'],
+    allowedDomains: ['example.com'],
+};
 
 const advancedWorkflows = [
   {
@@ -241,6 +248,19 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
     const [copiedPromptId, setCopiedPromptId] = useState<string | null>(null);
     const [isModelModalOpen, setIsModelModalOpen] = useState(false);
     const [editingModel, setEditingModel] = useState<ModelProviderConfig | null>(null);
+
+    const [policyEditorText, setPolicyEditorText] = useState<string>(() => {
+        try {
+            const savedPolicy = localStorage.getItem('echo-tool-policy');
+            if (savedPolicy) {
+                return JSON.stringify(JSON.parse(savedPolicy), null, 2);
+            }
+        } catch (error) {
+            console.error('Failed to parse saved policy', error);
+        }
+        return JSON.stringify(defaultToolExecutionPolicy, null, 2);
+    });
+    const [policySaveStatus, setPolicySaveStatus] = useState<string | null>(null);
 
     const [modelProviders, setModelProviders] = useState<ModelProviderConfig[]>(() => {
         try {
@@ -495,6 +515,29 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
         setModelProviders(prev => prev.map(p => p.id === providerId ? { ...p, enabled: !p.enabled } : p));
     };
 
+    const handleSavePolicy = async () => {
+        try {
+            const parsed = JSON.parse(policyEditorText) as ToolExecutionPolicy;
+            const normalizedPolicy: ToolExecutionPolicy = {
+                allowedPaths: Array.isArray(parsed.allowedPaths) ? parsed.allowedPaths : [],
+                blockedCommands: Array.isArray(parsed.blockedCommands) ? parsed.blockedCommands : [],
+                allowedDomains: Array.isArray(parsed.allowedDomains) ? parsed.allowedDomains : [],
+            };
+
+            localStorage.setItem('echo-tool-policy', JSON.stringify(normalizedPolicy));
+
+            await fetch('http://localhost:3001/policy', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(normalizedPolicy),
+            });
+
+            setPolicySaveStatus('Policy saved and synced to backend.');
+        } catch (error) {
+            setPolicySaveStatus(`Invalid policy JSON: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+    };
+
     return (
         <>
             <motion.div
@@ -529,6 +572,25 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
                             </div>
                         </Section>
                         
+                        <Section title="Security Policy" icon={<ServerIcon className="w-5 h-5" />}>
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Define allowed file paths, blocked shell commands, and allowed web domains.</p>
+                            <textarea
+                                value={policyEditorText}
+                                onChange={(e) => setPolicyEditorText(e.target.value)}
+                                rows={10}
+                                className="w-full font-mono bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg px-3 py-2 text-zinc-800 dark:text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-600/50 dark:focus:ring-[#00D4FF]/50 text-xs"
+                            />
+                            <button
+                                onClick={handleSavePolicy}
+                                className="mt-3 w-full bg-black/10 dark:bg-white/10 hover:bg-black/20 dark:hover:bg-white/20 text-zinc-800 dark:text-white font-semibold py-2 px-4 rounded-lg transition-colors text-sm"
+                            >
+                                Save Policy JSON
+                            </button>
+                            {policySaveStatus && (
+                                <p className="mt-2 text-xs text-gray-600 dark:text-gray-300">{policySaveStatus}</p>
+                            )}
+                        </Section>
+
                         <Section title="System Instructions" icon={<CommandLineIcon className="w-5 h-5" />}>
                             <textarea
                                 value={systemInstruction}
