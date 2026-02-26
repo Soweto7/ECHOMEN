@@ -1,5 +1,5 @@
-import { GoogleGenAI, FunctionDeclaration, Type, Chat, GenerateContentResponse } from "@google/genai";
-import type { Task, AgentRole, ToolCall, AgentPreferences, TodoItem, SubStep, Playbook, CustomAgent, Artifact } from '../types';
+import { GoogleGenAI, FunctionDeclaration, Type, GenerateContentResponse } from "@google/genai";
+import type { Task, AgentRole, ToolCall, AgentPreferences, TodoItem, SubStep, Playbook, CustomAgent, Artifact, ModelProviderConfig, ModelProviderSettings } from '../types';
 import { availableTools, toolDeclarations } from './tools';
 
 const structuredPlanSchema = {
@@ -36,7 +36,6 @@ const actionAnalysisSchema = {
 };
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-let chat: Chat | null = null;
 
 const WELCOME_TRIGGERS = ['what can you do', 'help', 'explain yourself', 'what is this', 'hello', 'hi', 'what are you', 'who are you'];
 
@@ -82,6 +81,148 @@ const handleApiResponse = (response: GenerateContentResponse, onTokenUpdate: (co
     return response.text;
 }
 
+
+export type RoutingTaskType = 'planner' | 'chat' | 'execution' | 'review' | 'synthesis';
+
+export interface ProviderUsageInfo {
+    providerId: string;
+    provider: string;
+    model: string;
+    latencyMs: number;
+    costTier: 'CHEAP' | 'BALANCED' | 'STRONG';
+    healthScore: number;
+}
+
+const defaultProviders: ModelProviderConfig[] = [{
+    id: 'gemini-default',
+    provider: 'GEMINI',
+    type: 'CLOUD',
+    description: 'Default Gemini fallback provider.',
+    config: { model_name: 'gemini-2.5-flash', api_key_env_var: 'GEMINI_API_KEY' },
+    integration_layer: 'NATIVE',
+    enabled: true,
+    routing: { task_types: ['planner', 'chat', 'execution', 'review', 'synthesis'], fallback_order: 1, cost_tier: 'CHEAP', timeout_ms: 30000 },
+}];
+
+const defaultRoutingPreferences = { local_first: false };
+
+const loadModelProviderSettings = (): ModelProviderSettings => {
+    try {
+        const raw = localStorage.getItem('echo-model-providers');
+        if (!raw) return { providers: defaultProviders, routing_preferences: defaultRoutingPreferences };
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return { providers: parsed, routing_preferences: defaultRoutingPreferences };
+        return {
+            providers: parsed.providers || defaultProviders,
+            routing_preferences: parsed.routing_preferences || defaultRoutingPreferences,
+        };
+    } catch {
+        return { providers: defaultProviders, routing_preferences: defaultRoutingPreferences };
+    }
+};
+
+const healthScore = (provider: ModelProviderConfig): number => {
+    const health = provider.health;
+    if (!health) return 60;
+    const attempts = health.success_count + health.failure_count;
+    const successRate = attempts > 0 ? health.success_count / attempts : 0.5;
+    const avgLatency = health.success_count > 0 ? health.total_latency_ms / health.success_count : 2000;
+    return Math.max(0, Math.min(100, (successRate * 100) - (avgLatency / 200) - (health.timeout_count * 4)));
+};
+
+const rankProviders = (providers: ModelProviderConfig[], taskType: RoutingTaskType, localFirst: boolean): ModelProviderConfig[] => {
+    const isCheapTask = taskType === 'planner' || taskType === 'chat';
+    const prefersStrong = taskType === 'review' || taskType === 'synthesis';
+    return [...providers]
+        .filter(p => p.enabled)
+        .filter(p => (p.routing?.task_types?.length ? p.routing.task_types.includes(taskType) : true))
+        .sort((a, b) => {
+            const localBoostA = localFirst && a.type === 'LOCAL' ? -100 : 0;
+            const localBoostB = localFirst && b.type === 'LOCAL' ? -100 : 0;
+            const costA = a.routing?.cost_tier || 'BALANCED';
+            const costB = b.routing?.cost_tier || 'BALANCED';
+            const costWeight = (tier: string) => {
+                if (isCheapTask) return tier === 'CHEAP' ? 0 : tier === 'BALANCED' ? 15 : 35;
+                if (prefersStrong) return tier === 'STRONG' ? 0 : tier === 'BALANCED' ? 12 : 24;
+                return tier === 'BALANCED' ? 0 : 8;
+            };
+            const orderA = a.routing?.fallback_order ?? 999;
+            const orderB = b.routing?.fallback_order ?? 999;
+            const healthDelta = healthScore(b) - healthScore(a);
+            return (localBoostA - localBoostB) + (costWeight(costA) - costWeight(costB)) + (orderA - orderB) + healthDelta;
+        });
+};
+
+const persistHealth = (providers: ModelProviderConfig[], routing_preferences: { local_first: boolean }) => {
+    try {
+        localStorage.setItem('echo-model-providers', JSON.stringify({ providers, routing_preferences }));
+    } catch {
+        // no-op
+    }
+};
+
+const routedGenerateContent = async (
+    taskType: RoutingTaskType,
+    payload: Parameters<typeof ai.models.generateContent>[0],
+): Promise<{ response: GenerateContentResponse; usage: ProviderUsageInfo }> => {
+    const settings = loadModelProviderSettings();
+    const providers = settings.providers.length > 0 ? settings.providers : defaultProviders;
+    const orderedChain = rankProviders(providers, taskType, settings.routing_preferences.local_first);
+
+    let lastError: Error | null = null;
+    for (const provider of orderedChain) {
+        const start = performance.now();
+        const timeoutMs = provider.routing?.timeout_ms ?? 30000;
+        try {
+            if (provider.provider !== 'GEMINI') {
+                throw new Error(`Provider ${provider.provider} is not yet supported by runtime adapter.`);
+            }
+            const request = { ...payload, model: provider.config.model_name || payload.model };
+            const response = await Promise.race([
+                ai.models.generateContent(request),
+                new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Provider timeout')), timeoutMs)),
+            ]);
+
+            const latencyMs = Math.round(performance.now() - start);
+            provider.health = {
+                success_count: (provider.health?.success_count || 0) + 1,
+                failure_count: provider.health?.failure_count || 0,
+                timeout_count: provider.health?.timeout_count || 0,
+                total_latency_ms: (provider.health?.total_latency_ms || 0) + latencyMs,
+                last_latency_ms: latencyMs,
+                last_used_at: new Date().toISOString(),
+            };
+            persistHealth(providers, settings.routing_preferences);
+            return {
+                response,
+                usage: {
+                    providerId: provider.id,
+                    provider: provider.provider,
+                    model: provider.config.model_name,
+                    latencyMs,
+                    costTier: provider.routing?.cost_tier || 'BALANCED',
+                    healthScore: Math.round(healthScore(provider)),
+                }
+            };
+        } catch (error) {
+            const latencyMs = Math.round(performance.now() - start);
+            const isTimeout = error instanceof Error && /timeout/i.test(error.message);
+            provider.health = {
+                success_count: provider.health?.success_count || 0,
+                failure_count: (provider.health?.failure_count || 0) + 1,
+                timeout_count: (provider.health?.timeout_count || 0) + (isTimeout ? 1 : 0),
+                total_latency_ms: provider.health?.total_latency_ms || 0,
+                last_latency_ms: latencyMs,
+                last_used_at: new Date().toISOString(),
+            };
+            persistHealth(providers, settings.routing_preferences);
+            lastError = error instanceof Error ? error : new Error(String(error));
+        }
+    }
+
+    throw lastError || new Error('No enabled model providers were available for routing.');
+};
+
 export const analyzeChatMessageForAction = async (prompt: string, onTokenUpdate: (count: number) => void): Promise<{ is_actionable: boolean; suggested_prompt: string }> => {
     const systemInstruction = `You are an intent-recognition AI. Your task is to analyze a user's chat message and determine if it contains an actionable command (e.g., "build this", "create a file", "run this command", "can you write a script for...") versus a conversational query (e.g., "how does this work?", "what is...", "explain...").
 - If it's an actionable command, set 'is_actionable' to true and rephrase the command into a clear, concise prompt for another AI agent.
@@ -89,7 +230,7 @@ export const analyzeChatMessageForAction = async (prompt: string, onTokenUpdate:
 Your response MUST be a valid JSON object adhering to the provided schema.`;
 
     try {
-        const response = await ai.models.generateContent({
+        const { response } = await routedGenerateContent('chat', {
             model: 'gemini-2.5-flash',
             contents: prompt,
             config: {
@@ -119,7 +260,7 @@ User: "make a new react component called header"
 Assistant: "Create a new React component named 'Header'. It should have a default export and a basic JSX structure."
 `;
     try {
-        const response = await ai.models.generateContent({
+        const { response } = await routedGenerateContent('planner', {
             model: 'gemini-2.5-flash',
             contents: prompt,
             config: {
@@ -166,7 +307,7 @@ ${playbookDescriptions}
 `;
     
     try {
-        const response = await ai.models.generateContent({
+        const { response } = await routedGenerateContent('planner', {
             model: 'gemini-2.5-flash',
             contents: recallPrompt,
         });
@@ -252,7 +393,7 @@ This context is for your awareness. Use it to create a more effective and inform
     }
 
     try {
-        const response = await ai.models.generateContent({
+        const { response } = await routedGenerateContent('planner', {
             model: 'gemini-2.5-flash',
             contents: prompt,
             config: {
@@ -320,7 +461,7 @@ This context is for your awareness. Use it to create a more effective and inform
 };
 
 
-export const determineNextStep = async (task: Task, subSteps: SubStep[], currentArtifacts: Artifact[], onTokenUpdate: (count: number) => void): Promise<{ thought: string; toolCall: ToolCall } | { isFinished: true; finalThought: string }> => {
+export const determineNextStep = async (task: Task, subSteps: SubStep[], currentArtifacts: Artifact[], onTokenUpdate: (count: number) => void): Promise<{ thought: string; toolCall: ToolCall; providerUsage?: ProviderUsageInfo } | { isFinished: true; finalThought: string; providerUsage?: ProviderUsageInfo }> => {
     const history = subSteps.map(step => 
         `Thought: ${step.thought}\nAction: ${JSON.stringify(step.toolCall)}\nObservation: ${step.observation}`
     ).join('\n\n');
@@ -350,7 +491,7 @@ ${history || "No actions taken yet."}
 What is your next action?
 `;
 
-    const response = await ai.models.generateContent({
+    const { response, usage } = await routedGenerateContent('execution', {
         model: 'gemini-2.5-flash',
         contents: prompt,
         config: {
@@ -364,10 +505,10 @@ What is your next action?
     try {
         const result = JSON.parse(resultJson);
         if (result.isFinished) {
-            return { isFinished: true, finalThought: result.finalThought };
+            return { isFinished: true, finalThought: result.finalThought, providerUsage: usage };
         }
         if (result.thought && result.toolCall && result.toolCall.name && result.toolCall.args) {
-            return { thought: result.thought, toolCall: result.toolCall };
+            return { thought: result.thought, toolCall: result.toolCall, providerUsage: usage };
         }
         throw new Error("Invalid JSON response from agent brain.");
     } catch (e) {
@@ -387,16 +528,14 @@ export const getChatResponse = async (prompt: string, onTokenUpdate: (count: num
         return ECHO_EXPLANATION;
     }
 
-    if (!chat) {
-        chat = ai.chats.create({
+    try {
+        const { response } = await routedGenerateContent('chat', {
             model: 'gemini-2.5-flash',
+            contents: prompt,
             config: {
                 systemInstruction: 'You are ECHO, a helpful AI assistant. You are direct, efficient, and concise in your responses.',
             },
         });
-    }
-    try {
-        const response = await chat.sendMessage({ message: prompt });
         return handleApiResponse(response, onTokenUpdate);
     } catch (error) {
         console.error("Error getting chat response:", error);
@@ -421,7 +560,7 @@ Based on the original prompt and the successful plan, create a short, descriptiv
 `;
 
     try {
-        const response = await ai.models.generateContent({
+        const { response } = await routedGenerateContent('synthesis', {
             model: 'gemini-2.5-flash',
             contents: summarizationPrompt,
         });

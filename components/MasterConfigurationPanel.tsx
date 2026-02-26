@@ -14,7 +14,7 @@ import { SupabaseIcon } from './icons/SupabaseIcon';
 import { GenericApiIcon } from './icons/GenericApiIcon';
 import { AgentCreationModal } from './AgentCreationModal';
 // FIX: Added Service to the import from the central types file.
-import { CustomAgent, Playbook, AgentPreferences, AgentRole, TodoItem, Service, ModelProviderConfig } from '../types';
+import { CustomAgent, Playbook, AgentPreferences, AgentRole, TodoItem, Service, ModelProviderConfig, ModelRoutingPreferences, ModelProviderSettings } from '../types';
 import { PencilIcon } from './icons/PencilIcon';
 import { TrashIcon } from './icons/TrashIcon';
 import { PlusIcon } from './icons/PlusIcon';
@@ -119,7 +119,13 @@ const initialModelProviders: ModelProviderConfig[] = [
       api_key_env_var: 'GEMINI_API_KEY'
     },
     integration_layer: 'NATIVE',
-    enabled: true
+    enabled: true,
+    routing: {
+      task_types: ['planner', 'chat', 'execution'],
+      fallback_order: 1,
+      cost_tier: 'CHEAP',
+      timeout_ms: 30000,
+    }
   },
   {
     id: 'ollama-llama3-8b',
@@ -131,7 +137,13 @@ const initialModelProviders: ModelProviderConfig[] = [
       base_url: 'http://localhost:11434/api/generate'
     },
     integration_layer: 'LANGCHAIN',
-    enabled: true
+    enabled: true,
+    routing: {
+      task_types: ['execution', 'planner'],
+      fallback_order: 2,
+      cost_tier: 'CHEAP',
+      timeout_ms: 45000,
+    }
   },
   {
     id: 'hf-mixtral-8x7b',
@@ -144,9 +156,19 @@ const initialModelProviders: ModelProviderConfig[] = [
       endpoint_url: 'https://api-inference.huggingface.co/models/...'
     },
     integration_layer: 'LANGCHAIN',
-    enabled: false
+    enabled: false,
+    routing: {
+      task_types: ['review', 'synthesis'],
+      fallback_order: 3,
+      cost_tier: 'STRONG',
+      timeout_ms: 45000,
+    }
   }
 ];
+
+const initialRoutingPreferences: ModelRoutingPreferences = {
+    local_first: false,
+};
 
 const Section: React.FC<{ title: string; icon?: React.ReactNode; children: React.ReactNode; defaultOpen?: boolean }> = ({ title, icon, children, defaultOpen = true }) => {
     const [isOpen, setIsOpen] = useState(defaultOpen);
@@ -246,10 +268,22 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
         try {
             const saved = localStorage.getItem('echo-model-providers');
             if (saved) {
-                return JSON.parse(saved);
+                const parsed = JSON.parse(saved);
+                if (Array.isArray(parsed)) return parsed;
+                if (parsed?.providers) return parsed.providers;
             }
         } catch (e) { console.error(e); }
         return initialModelProviders;
+    });
+    const [routingPreferences, setRoutingPreferences] = useState<ModelRoutingPreferences>(() => {
+        try {
+            const saved = localStorage.getItem('echo-model-providers');
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                if (parsed?.routing_preferences) return parsed.routing_preferences;
+            }
+        } catch (e) { console.error(e); }
+        return initialRoutingPreferences;
     });
     
     const [agents, setAgents] = useState<CustomAgent[]>(() => {
@@ -347,9 +381,13 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
 
     useEffect(() => {
         try {
-            localStorage.setItem('echo-model-providers', JSON.stringify(modelProviders));
+            const settingsPayload: ModelProviderSettings = {
+                providers: modelProviders,
+                routing_preferences: routingPreferences,
+            };
+            localStorage.setItem('echo-model-providers', JSON.stringify(settingsPayload));
         } catch (e) { console.error(e); }
-    }, [modelProviders]);
+    }, [modelProviders, routingPreferences]);
 
     const availableAgentNames = useMemo(() => {
         const customAgentNames = agents.filter(a => !a.isCore).map(a => a.name);
@@ -702,9 +740,12 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
                                                 <div className="flex-grow overflow-hidden">
                                                     <p className="font-semibold text-zinc-800 dark:text-white truncate" title={provider.config.model_name}>{provider.config.model_name}</p>
                                                     <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{provider.description}</p>
-                                                    <div className="flex items-center gap-2 mt-2">
+                                                    <div className="flex items-center gap-2 mt-2 flex-wrap">
                                                         <span className={`px-2 py-0.5 rounded-full text-xs font-mono ${provider.type === 'CLOUD' ? 'bg-sky-500/20 text-sky-400' : 'bg-green-500/20 text-green-400'}`}>{provider.type}</span>
                                                         <span className={`px-2 py-0.5 rounded-full text-xs font-mono ${provider.integration_layer === 'NATIVE' ? 'bg-purple-500/20 text-purple-400' : 'bg-orange-500/20 text-orange-400'}`}>{provider.integration_layer}</span>
+                                                        <span className="px-2 py-0.5 rounded-full text-xs font-mono bg-zinc-500/20 text-zinc-500 dark:text-zinc-300">order {provider.routing?.fallback_order ?? '-'}</span>
+                                                        <span className="px-2 py-0.5 rounded-full text-xs font-mono bg-cyan-500/20 text-cyan-600 dark:text-cyan-300">{provider.routing?.cost_tier || 'BALANCED'}</span>
+                                                        <span className="px-2 py-0.5 rounded-full text-xs font-mono bg-emerald-500/20 text-emerald-600 dark:text-emerald-300">success {provider.health ? `${provider.health.success_count}/${provider.health.success_count + provider.health.failure_count}` : 'n/a'}</span>
                                                     </div>
                                                 </div>
                                             </div>
@@ -816,9 +857,11 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
                 {isModelModalOpen && (
                     <ModelProviderConfigurationModal
                         providerConfig={editingModel}
+                        routingPreferences={routingPreferences}
                         isOpen={isModelModalOpen}
                         onClose={() => setIsModelModalOpen(false)}
                         onSave={handleSaveModel}
+                        onSaveRoutingPreferences={setRoutingPreferences}
                     />
                 )}
             </AnimatePresence>
