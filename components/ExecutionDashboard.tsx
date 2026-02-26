@@ -1,7 +1,7 @@
 import React, { useState, useRef, useLayoutEffect, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { CloseIcon } from './icons/CloseIcon';
-import { Task, LogEntry, TaskStatus } from '../types';
+import { Task, LogEntry, TaskStatus, AgentStatus } from '../types';
 import { PlannerIcon } from './icons/PlannerIcon';
 import { ExecutorIcon } from './icons/ExecutorIcon';
 import { ReviewerIcon } from './icons/ReviewerIcon';
@@ -110,10 +110,12 @@ interface ExecutionDashboardProps {
     tasks: Task[];
     liveLogs: LogEntry[];
     onCancelTask: (taskId: string) => void;
+    currentPrompt: string;
+    agentStatus: AgentStatus;
 }
 
 
-export const ExecutionDashboard: React.FC<ExecutionDashboardProps> = ({ tasks, liveLogs, onCancelTask }) => {
+export const ExecutionDashboard: React.FC<ExecutionDashboardProps> = ({ tasks, liveLogs, onCancelTask, currentPrompt, agentStatus }) => {
     const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
     const [relatedTaskIds, setRelatedTaskIds] = useState<{ dependencies: string[], dependents: string[] }>({ dependencies: [], dependents: [] });
     const [lines, setLines] = useState<Line[]>([]);
@@ -179,6 +181,31 @@ export const ExecutionDashboard: React.FC<ExecutionDashboardProps> = ({ tasks, l
 
     const selectedTask = tasks.find(t => t.id === selectedTaskId);
     const isCancellable = selectedTask && !['Done', 'Error', 'Cancelled'].includes(selectedTask.status);
+
+    const runStory = React.useMemo(() => {
+        const completedTasks = tasks.filter(task => task.status === 'Done');
+        const toolActions = tasks.reduce((count, task) => count + (task.subSteps?.length || 0), 0);
+        const keyDecisions = liveLogs
+            .filter(log => ['WARN', 'ERROR', 'SUCCESS'].includes(log.status) || /refined prompt|playbook|review|cancel/i.test(log.message))
+            .slice(-4)
+            .map(log => log.message);
+
+        const finalOutcome = agentStatus === AgentStatus.ERROR
+            ? 'Run ended with errors.'
+            : agentStatus === AgentStatus.FINISHED || agentStatus === AgentStatus.SYNTHESIZING
+                ? 'Run completed and is being synthesized.'
+                : agentStatus === AgentStatus.RUNNING
+                    ? 'Run currently in progress.'
+                    : 'Run is idle.';
+
+        return {
+            summary: currentPrompt || 'No active prompt captured.',
+            thoughtSummary: `${completedTasks.length}/${tasks.length || 0} tasks completed with ${toolActions} tool actions.`,
+            toolActions,
+            keyDecisions,
+            finalOutcome,
+        };
+    }, [tasks, liveLogs, currentPrompt, agentStatus]);
 
     return (
         <div className="w-full max-w-7xl mx-auto px-4 flex-grow flex flex-col gap-8">
@@ -371,6 +398,21 @@ export const ExecutionDashboard: React.FC<ExecutionDashboardProps> = ({ tasks, l
                 )}
             </AnimatePresence>
              
+
+             <div className="rounded-xl border border-black/10 dark:border-white/10 bg-white/50 dark:bg-black/20 p-4">
+                <h2 className="text-lg font-bold text-cyan-600 dark:text-[#00D4FF] tracking-widest uppercase mb-2">Run Story Timeline</h2>
+                <div className="space-y-2 text-sm text-zinc-700 dark:text-gray-300">
+                    <p><span className="font-semibold">Thought Summary:</span> {runStory.thoughtSummary}</p>
+                    <p><span className="font-semibold">Run Brief:</span> {runStory.summary}</p>
+                    <p><span className="font-semibold">Tool Actions:</span> {runStory.toolActions}</p>
+                    <p><span className="font-semibold">Key Decisions:</span></p>
+                    <ul className="list-disc ml-5">
+                        {runStory.keyDecisions.length > 0 ? runStory.keyDecisions.map((decision, index) => <li key={index}>{decision}</li>) : <li>No major decisions logged yet.</li>}
+                    </ul>
+                    <p><span className="font-semibold">Final Outcome:</span> {runStory.finalOutcome}</p>
+                </div>
+             </div>
+
              <div>
                 <h2 className="text-lg font-bold text-cyan-600 dark:text-[#00D4FF] tracking-widest uppercase mb-2">Live Terminal</h2>
                 <LiveTerminal logs={liveLogs} />
