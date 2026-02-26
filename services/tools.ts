@@ -47,8 +47,8 @@ const checkAuth = (serviceId: string): boolean => {
             const service = services.find(s => s.id === serviceId);
             return service?.status === 'Connected';
         }
-    } catch (e) {
-        console.error("Could not check auth status", e);
+    } catch {
+        console.error("Could not check auth status");
     }
     return false;
 }
