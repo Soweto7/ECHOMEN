@@ -13,6 +13,8 @@ import { PlugIcon } from './icons/PlugIcon';
 import { WebHawkIcon } from './icons/WebHawkIcon';
 import { StopIcon } from './icons/StopIcon';
 
+const V1_PROMISE = 'ECHO turns a plain-English app idea into a deployment-ready build plan, code scaffold, and launch checklist in one guided run.';
+
 
 const statusConfig = {
     Done: { color: 'bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/20 dark:bg-green-500/20 dark:border-green-500/30', glow: '' },
@@ -186,6 +188,17 @@ export const ExecutionDashboard: React.FC<ExecutionDashboardProps> = ({ tasks, l
                 <h2 className="text-lg font-bold text-cyan-600 dark:text-[#00D4FF] tracking-widest uppercase">Agent Brain</h2>
                 <AgentOrchestration tasks={tasks} />
             </div>
+            {tasks.length === 0 && (
+                <div className="rounded-xl border border-cyan-500/30 bg-cyan-500/5 p-6 text-sm text-zinc-700 dark:text-gray-300">
+                    <h3 className="text-base font-bold text-zinc-900 dark:text-white">v1 Hero Workflow: Idea → Launch Plan</h3>
+                    <p className="mt-2">{V1_PROMISE}</p>
+                    <ol className="list-decimal ml-5 mt-3 space-y-1">
+                        <li>Share your app idea, audience, and desired launch timeline.</li>
+                        <li>ECHO generates a scoped build plan with ordered implementation tasks.</li>
+                        <li>ECHO outputs code scaffolds and a launch checklist in artifacts.</li>
+                    </ol>
+                </div>
+            )}
             <div>
                  <h2 className="text-lg font-bold text-cyan-600 dark:text-[#00D4FF] tracking-widest uppercase">Task Pipeline</h2>
                  <div ref={pipelineRef} className="relative mt-2 flex gap-4 overflow-x-auto pb-4 p-2 -m-2">
