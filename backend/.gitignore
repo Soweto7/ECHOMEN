@@ -1,0 +1,10 @@
+#-*- mode: gitignore -*-
+
+# dotenv environment variables file
+.env
+
+# TypeScript
+/dist
+
+# dependencies
+/node_modules

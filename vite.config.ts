@@ -11,10 +11,6 @@ export default defineConfig(({ mode }) => {
         allowedHosts: ['3000-i94v33d7l5k93u0lnb9h2-0cac99db.manus-asia.computer'],
       },
       plugins: [react()],
-      define: {
-        'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
-      },
       resolve: {
         alias: {
           '@': path.resolve(__dirname, '.'),
