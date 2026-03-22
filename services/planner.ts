@@ -1,6 +1,7 @@
 import { GoogleGenAI, FunctionDeclaration, Type, Chat, GenerateContentResponse } from "@google/genai";
 import type { Task, AgentRole, ToolCall, AgentPreferences, TodoItem, SubStep, Playbook, CustomAgent, Artifact } from '../types';
 import { availableTools, toolDeclarations } from './tools';
+import { buildSoulAwareSystemInstruction } from './soul';
 
 const structuredPlanSchema = {
     type: Type.ARRAY,
@@ -37,6 +38,7 @@ const actionAnalysisSchema = {
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 let chat: Chat | null = null;
+let chatSystemInstruction = '';
 
 const WELCOME_TRIGGERS = ['what can you do', 'help', 'explain yourself', 'what is this', 'hello', 'hi', 'what are you', 'who are you'];
 
@@ -83,10 +85,12 @@ const handleApiResponse = (response: GenerateContentResponse, onTokenUpdate: (co
 }
 
 export const analyzeChatMessageForAction = async (prompt: string, onTokenUpdate: (count: number) => void): Promise<{ is_actionable: boolean; suggested_prompt: string }> => {
-    const systemInstruction = `You are an intent-recognition AI. Your task is to analyze a user's chat message and determine if it contains an actionable command (e.g., "build this", "create a file", "run this command", "can you write a script for...") versus a conversational query (e.g., "how does this work?", "what is...", "explain...").
+    const systemInstruction = await buildSoulAwareSystemInstruction({
+        baseSystemInstruction: `You are an intent-recognition AI. Your task is to analyze a user's chat message and determine if it contains an actionable command (e.g., "build this", "create a file", "run this command", "can you write a script for...") versus a conversational query (e.g., "how does this work?", "what is...", "explain...").
 - If it's an actionable command, set 'is_actionable' to true and rephrase the command into a clear, concise prompt for another AI agent.
 - If it's conversational, set 'is_actionable' to false.
-Your response MUST be a valid JSON object adhering to the provided schema.`;
+Your response MUST be a valid JSON object adhering to the provided schema.`,
+    });
 
     try {
         const response = await ai.models.generateContent({
@@ -123,7 +127,7 @@ Assistant: "Create a new React component named 'Header'. It should have a defaul
             model: 'gemini-2.5-flash',
             contents: prompt,
             config: {
-                systemInstruction: systemInstruction,
+                systemInstruction: await buildSoulAwareSystemInstruction({ baseSystemInstruction: systemInstruction }),
                 temperature: 0.2, // Be conservative with changes
             },
         });
@@ -258,7 +262,7 @@ This context is for your awareness. Use it to create a more effective and inform
             config: {
                 responseMimeType: "application/json",
                 responseSchema: structuredPlanSchema,
-                systemInstruction: systemInstruction,
+                systemInstruction: await buildSoulAwareSystemInstruction({ baseSystemInstruction: systemInstruction }),
             },
         });
         
@@ -355,7 +359,9 @@ What is your next action?
         contents: prompt,
         config: {
             responseMimeType: "application/json",
-            systemInstruction: "You are a methodical AI agent executor. Follow the ReAct (Reason-Act) pattern. Your response must be a single, valid JSON object representing your next thought and action, or a finalization signal.",
+            systemInstruction: await buildSoulAwareSystemInstruction({
+                baseSystemInstruction: "You are a methodical AI agent executor. Follow the ReAct (Reason-Act) pattern. Your response must be a single, valid JSON object representing your next thought and action, or a finalization signal.",
+            }),
         },
     });
     
@@ -387,11 +393,16 @@ export const getChatResponse = async (prompt: string, onTokenUpdate: (count: num
         return ECHO_EXPLANATION;
     }
 
-    if (!chat) {
+    const systemInstruction = await buildSoulAwareSystemInstruction({
+        baseSystemInstruction: 'You are ECHO, a helpful AI assistant. You are direct, efficient, and concise in your responses.',
+    });
+
+    if (!chat || chatSystemInstruction !== systemInstruction) {
+        chatSystemInstruction = systemInstruction;
         chat = ai.chats.create({
             model: 'gemini-2.5-flash',
             config: {
-                systemInstruction: 'You are ECHO, a helpful AI assistant. You are direct, efficient, and concise in your responses.',
+                systemInstruction,
             },
         });
     }
