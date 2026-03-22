@@ -30,7 +30,8 @@ const App: React.FC = () => {
     const [currentPrompt, setCurrentPrompt] = useState<string>('');
     const [commandCenterInput, setCommandCenterInput] = useState<string>('');
     const [sessionStats, setSessionStats] = useState<SessionStats>({ totalTokensUsed: 0 });
-    const [playbookCandidate, setPlaybookCandidate] = useState<{ suggestedName: string; tasks: Task[]; triggerPrompt: string } | null>(null);
+    const [playbookCandidate, setPlaybookCandidate] = useState<{ suggestedName: string; tasks: Task[]; triggerPrompt: string; runId: string } | null>(null);
+    const [currentRunId, setCurrentRunId] = useState<string>('');
 
     const executorRef = useRef<AgentExecutor | null>(null);
 
@@ -56,6 +57,31 @@ const App: React.FC = () => {
     const handleTokenUpdate = (tokenCount: number) => {
         if (typeof tokenCount === 'number' && !isNaN(tokenCount)) {
             setSessionStats(prev => ({ ...prev, totalTokensUsed: prev.totalTokensUsed + tokenCount }));
+        }
+    };
+
+    const parsePlaybookIdFromTaskId = (taskId: string): string | null => {
+        const match = taskId.match(/^playbook-(playbook-\d+)-/);
+        return match ? match[1] : null;
+    };
+
+    const scorePlaybookRun = (playbookId: string, success: boolean) => {
+        try {
+            const savedPlaybooksJSON = localStorage.getItem('echo-playbooks');
+            if (!savedPlaybooksJSON) return;
+
+            const playbooks = JSON.parse(savedPlaybooksJSON) as Playbook[];
+            const updatedPlaybooks = playbooks.map(playbook => {
+                if (playbook.id !== playbookId) return playbook;
+                const runCount = (playbook.runCount ?? 0) + 1;
+                const successCount = (playbook.successCount ?? 0) + (success ? 1 : 0);
+                const successRate = runCount > 0 ? Number(((successCount / runCount) * 100).toFixed(1)) : 0;
+                return { ...playbook, runCount, successCount, successRate };
+            });
+
+            localStorage.setItem('echo-playbooks', JSON.stringify(updatedPlaybooks));
+        } catch (error) {
+            console.error('Failed to score playbook run', error);
         }
     };
 
@@ -144,6 +170,8 @@ const App: React.FC = () => {
         setLiveLogs([]);
         setArtifacts([]);
         setCurrentPrompt(prompt);
+        const runId = `run-${Date.now()}`;
+        setCurrentRunId(runId);
         setAgentStatus(AgentStatus.RUNNING);
 
         addLog({ status: 'INFO', message: `User command received: "${prompt}"` });
@@ -176,7 +204,8 @@ const App: React.FC = () => {
             setTasks(initialTasks);
             
             if (initialTasks.length > 0 && initialTasks[0].id.startsWith('playbook-')) {
-                 addLog({ status: 'SUCCESS', message: '[Planner] Found relevant playbook. Loading tasks from memory.' });
+                 const playbookId = parsePlaybookIdFromTaskId(initialTasks[0].id);
+                 addLog({ status: 'SUCCESS', message: `[Planner] Found relevant playbook${playbookId ? ` (${playbookId})` : ''}. Loading tasks from memory.` });
             } else {
                  addLog({ status: 'SUCCESS', message: '[Planner] Initial task pipeline generated.' });
             }
@@ -199,6 +228,10 @@ const App: React.FC = () => {
                 onFail: (errorMessage) => {
                     addLog({ status: 'ERROR', message: `ECHO: Execution failed. ${errorMessage}` });
                     setAgentStatus(AgentStatus.ERROR);
+                },
+                onPlaybookRunScored: ({ playbookId, success }) => {
+                    scorePlaybookRun(playbookId, success);
+                    addLog({ status: success ? 'SUCCESS' : 'WARN', message: `[Replay] Playbook ${playbookId} ${(success ? 'succeeded' : 'failed')}. Updated success score.` });
                 }
             });
             executorRef.current = executor;
@@ -223,6 +256,7 @@ const App: React.FC = () => {
                         suggestedName,
                         tasks,
                         triggerPrompt: currentPrompt,
+                        runId: currentRunId || `run-${Date.now()}`,
                     });
                     setIsPlaybookModalOpen(true);
                 } catch (error) {
@@ -235,7 +269,7 @@ const App: React.FC = () => {
             }
         }
         handleSynthesis();
-    }, [agentStatus, currentPrompt, tasks]);
+    }, [agentStatus, currentPrompt, tasks, currentRunId]);
 
 
     const handleSavePlaybook = (name: string, description: string) => {
@@ -249,6 +283,13 @@ const App: React.FC = () => {
             triggerPrompt: playbookCandidate.triggerPrompt,
             tasks: taskTemplates,
             createdAt: new Date().toISOString(),
+            version: 1,
+            createdFromRunId: playbookCandidate.runId,
+            successRate: 100,
+            runCount: 1,
+            successCount: 1,
+            retrievalBoost: 0,
+            isArchived: false,
         };
 
         const savedPlaybooksJSON = localStorage.getItem('echo-playbooks');

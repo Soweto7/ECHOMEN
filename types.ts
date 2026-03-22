@@ -98,6 +98,13 @@ export interface Playbook {
   triggerPrompt: string;
   tasks: Omit<Task, 'id' | 'status' | 'dependencies' | 'logs' | 'reviewHistory' | 'retryCount' | 'maxRetries' | 'subSteps'>[];
   createdAt: string;
+  version: number;
+  createdFromRunId: string;
+  successRate: number;
+  runCount: number;
+  successCount: number;
+  retrievalBoost: number;
+  isArchived: boolean;
 }
 
 export interface AppDeployment {
