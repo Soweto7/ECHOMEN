@@ -205,6 +205,19 @@ const coreAgents: CustomAgent[] = [
     { id: 'core-docmaster', name: 'DocMaster', instructions: 'Reads and analyzes documents.', isCore: true, enabled: false, icon: 'DocumentMaster', description: "Reads and analyzes documents." }
 ];
 
+
+const SERVICE_VALIDATION_ENDPOINT = 'http://localhost:3001/validate-service-connection';
+const SERVICE_AUTH_STORAGE_KEY = 'echo-service-auth';
+
+interface ServiceValidationResponse {
+    success: boolean;
+    message?: string;
+    fieldErrors?: Record<string, string>;
+    connectionRef?: string;
+    token?: string;
+    expiresAt?: string;
+}
+
 const defaultAgentModels = [
     'ECHOMEN | Orchestrator',
     'Gemini Advanced',
@@ -221,9 +234,31 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
             if (savedServicesJSON) {
                 const savedServices = JSON.parse(savedServicesJSON);
                 // Merge with initialServices to ensure all services are present, preserving status
+                const savedAuthJSON = localStorage.getItem(SERVICE_AUTH_STORAGE_KEY);
+                const savedAuth: Record<string, { ref?: string; expiresAt?: string | null }> = savedAuthJSON ? JSON.parse(savedAuthJSON) : {};
+
                 return initialServices.map(is => {
                     const saved = savedServices.find((ss: Service) => ss.id === is.id);
-                    return saved ? { ...is, status: saved.status } : is;
+                    if (!saved) {
+                        return is;
+                    }
+                    const safeStatus: Service['status'] = ['Connected', 'Connection Error'].includes(saved.status)
+                        ? saved.status as Service['status']
+                        : 'Not Connected';
+
+                    if (safeStatus !== 'Connected') {
+                        return { ...is, status: safeStatus };
+                    }
+
+                    const authRecord = savedAuth[is.id];
+                    const hasRef = Boolean(authRecord?.ref);
+                    const isExpired = Boolean(authRecord?.expiresAt && Date.parse(authRecord.expiresAt) <= Date.now());
+
+                    if (!hasRef || isExpired) {
+                        return { ...is, status: 'Connection Error' };
+                    }
+
+                    return { ...is, status: 'Connected' };
                 });
             }
         } catch (error) {
@@ -386,16 +421,77 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
     const [isAgentModalOpen, setIsAgentModalOpen] = useState(false);
     const [editingAgent, setEditingAgent] = useState<CustomAgent | null>(null);
 
-    const handleSaveService = (serviceId: string, values: { [key: string]: string }) => {
-        console.log(`Saving service ${serviceId}`, values);
-        // Here you would typically encrypt and save the credentials
-        setServices(prev => prev.map(s => s.id === serviceId ? { ...s, status: 'Connected' } : s));
-        setSelectedService(null);
+    const handleSaveService = async (serviceId: string, values: { [key: string]: string }) => {
+        try {
+            const response = await fetch(SERVICE_VALIDATION_ENDPOINT, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ serviceId, credentials: values })
+            });
+
+            let payload: ServiceValidationResponse = { success: false, message: 'Validation failed.' };
+            try {
+                payload = await response.json();
+            } catch {
+                // Keep fallback payload when response is not JSON.
+            }
+
+            if (!response.ok || !payload.success) {
+                setServices(prev => prev.map(s => s.id === serviceId ? { ...s, status: 'Connection Error' } : s));
+                return {
+                    success: false,
+                    message: payload.message || `Unable to validate ${serviceId} connection.`,
+                    fieldErrors: payload.fieldErrors || {}
+                };
+            }
+
+            const connectionRef = payload.connectionRef || payload.token;
+            if (!connectionRef) {
+                setServices(prev => prev.map(s => s.id === serviceId ? { ...s, status: 'Connection Error' } : s));
+                return {
+                    success: false,
+                    message: 'Validation succeeded, but no secure connection reference was returned.'
+                };
+            }
+
+            const existingAuthJSON = localStorage.getItem(SERVICE_AUTH_STORAGE_KEY);
+            const existingAuth = existingAuthJSON ? JSON.parse(existingAuthJSON) : {};
+            const nextAuth = {
+                ...existingAuth,
+                [serviceId]: {
+                    ref: connectionRef,
+                    expiresAt: payload.expiresAt || null,
+                    validatedAt: new Date().toISOString()
+                }
+            };
+            localStorage.setItem(SERVICE_AUTH_STORAGE_KEY, JSON.stringify(nextAuth));
+
+            setServices(prev => prev.map(s => s.id === serviceId ? { ...s, status: 'Connected' } : s));
+            setSelectedService(null);
+            return { success: true, message: payload.message };
+        } catch (error) {
+            console.error(`Failed to validate service ${serviceId}`, error);
+            setServices(prev => prev.map(s => s.id === serviceId ? { ...s, status: 'Connection Error' } : s));
+            return {
+                success: false,
+                message: error instanceof Error ? error.message : 'Validation request failed.'
+            };
+        }
     };
     
     const handleDisconnectService = (serviceId: string) => {
         console.log(`Disconnecting service ${serviceId}`);
         setServices(prev => prev.map(s => s.id === serviceId ? { ...s, status: 'Not Connected' } : s));
+        try {
+            const existingAuthJSON = localStorage.getItem(SERVICE_AUTH_STORAGE_KEY);
+            if (existingAuthJSON) {
+                const existingAuth = JSON.parse(existingAuthJSON);
+                delete existingAuth[serviceId];
+                localStorage.setItem(SERVICE_AUTH_STORAGE_KEY, JSON.stringify(existingAuth));
+            }
+        } catch (error) {
+            console.error('Failed to clear service auth reference', error);
+        }
         setSelectedService(null);
     };
 
@@ -748,7 +844,7 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
                                                 <p className="font-semibold text-zinc-800 dark:text-white">{service.name}</p>
                                             </div>
                                             <div className="flex items-center gap-4">
-                                                <span className={`text-xs font-bold ${service.status === 'Connected' ? 'text-green-500 dark:text-green-400' : 'text-gray-500'}`}>
+                                                <span className={`text-xs font-bold ${service.status === 'Connected' ? 'text-green-500 dark:text-green-400' : service.status === 'Connection Error' ? 'text-red-500 dark:text-red-400' : 'text-gray-500'}`}>
                                                     {service.status}
                                                 </span>
                                                 <button 
