@@ -222,8 +222,8 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
                 const savedServices = JSON.parse(savedServicesJSON);
                 // Merge with initialServices to ensure all services are present, preserving status
                 return initialServices.map(is => {
-                    const saved = savedServices.find((ss: Service) => ss.id === is.id);
-                    return saved ? { ...is, status: saved.status } : is;
+                    const saved = savedServices.find((ss: Partial<Service>) => ss.id === is.id);
+                    return saved ? { ...is, status: saved.status ?? 'Not Connected', lastValidatedAt: saved.lastValidatedAt } : is;
                 });
             }
         } catch (error) {
@@ -337,8 +337,8 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
     
     useEffect(() => {
         try {
-            // Persist only the ID and status of services to avoid storing sensitive info
-            const servicesToSave = services.map(({ id, status }) => ({ id, status }));
+            // Persist only non-sensitive connection metadata.
+            const servicesToSave = services.map(({ id, status, lastValidatedAt }) => ({ id, status, lastValidatedAt }));
             localStorage.setItem('echo-services', JSON.stringify(servicesToSave));
         } catch(error) {
             console.error("Failed to save services to localStorage", error);
@@ -386,16 +386,28 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
     const [isAgentModalOpen, setIsAgentModalOpen] = useState(false);
     const [editingAgent, setEditingAgent] = useState<CustomAgent | null>(null);
 
-    const handleSaveService = (serviceId: string, values: { [key: string]: string }) => {
-        console.log(`Saving service ${serviceId}`, values);
-        // Here you would typically encrypt and save the credentials
-        setServices(prev => prev.map(s => s.id === serviceId ? { ...s, status: 'Connected' } : s));
+    const handleSaveService = async (serviceId: string, values: { [key: string]: string }) => {
+        const response = await fetch('http://localhost:3001/validate-service', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ serviceId, credentials: values }),
+        });
+
+        const payload = await response.json();
+
+        if (!response.ok || !payload.valid) {
+            throw new Error(payload.errorType || 'provider_down');
+        }
+
+        setServices(prev => prev.map(s => s.id === serviceId ? { ...s, status: 'Connected', lastValidatedAt: payload.lastValidatedAt ?? new Date().toISOString() } : s));
         setSelectedService(null);
     };
     
     const handleDisconnectService = (serviceId: string) => {
         console.log(`Disconnecting service ${serviceId}`);
-        setServices(prev => prev.map(s => s.id === serviceId ? { ...s, status: 'Not Connected' } : s));
+        setServices(prev => prev.map(s => s.id === serviceId ? { ...s, status: 'Not Connected', lastValidatedAt: undefined } : s));
         setSelectedService(null);
     };
 

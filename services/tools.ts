@@ -45,13 +45,19 @@ const checkAuth = (serviceId: string): boolean => {
         if (savedServicesJSON) {
             const services: Partial<Service>[] = JSON.parse(savedServicesJSON);
             const service = services.find(s => s.id === serviceId);
-            return service?.status === 'Connected';
+            return service?.status === 'Connected' && Boolean(service.lastValidatedAt);
         }
     } catch (e) {
         console.error("Could not check auth status", e);
     }
     return false;
 }
+
+const ensureValidatedService = (serviceId: string, serviceName: string): void => {
+    if (!checkAuth(serviceId)) {
+        throw new Error(`${serviceName} service is not validated. Reconnect it from settings to continue.`);
+    }
+};
 
 const getSandboxToolRunner = (operation: string, args: object) => {
     if (checkAuth('daytona')) {
@@ -129,27 +135,27 @@ const executeCode = async (language: 'javascript', code: string): Promise<string
 // --- GitHub Tools ---
 
 const github_create_repo = async (name: string, description: string, is_private: boolean): Promise<any> => {
-    if (!checkAuth('github')) throw new Error("GitHub service not connected.");
+    ensureValidatedService('github', 'GitHub');
     return callBackendTool('github_create_repo', { name, description, is_private });
 };
 
 const github_get_pr_details = async (pr_url: string): Promise<any> => {
-    if (!checkAuth('github')) throw new Error("GitHub service not connected.");
+    ensureValidatedService('github', 'GitHub');
     return callBackendTool('github_get_pr_details', { pr_url });
 };
 
 const github_post_pr_comment = async (pr_url: string, comment: string): Promise<any> => {
-    if (!checkAuth('github')) throw new Error("GitHub service not connected.");
+    ensureValidatedService('github', 'GitHub');
     return callBackendTool('github_post_pr_comment', { pr_url, comment });
 };
 
 const github_merge_pr = async (pr_url: string, method: 'merge' | 'squash' | 'rebase'): Promise<any> => {
-    if (!checkAuth('github')) throw new Error("GitHub service not connected.");
+    ensureValidatedService('github', 'GitHub');
     return callBackendTool('github_merge_pr', { pr_url, method });
 };
 
 const github_create_file_in_repo = async (repo_name: string, path: string, content: string, commit_message: string): Promise<any> => {
-    if (!checkAuth('github')) throw new Error("GitHub service not connected.");
+    ensureValidatedService('github', 'GitHub');
     return callBackendTool('github_create_file_in_repo', { repo_name, path, content, commit_message });
 };
 
@@ -157,21 +163,21 @@ const github_create_file_in_repo = async (repo_name: string, path: string, conte
 // --- Memory Tools (Supabase Integration) ---
 
 const memory_save = async (key: string, value: string, tags: string[]): Promise<string> => {
-    if (!checkAuth(\'supabase\')) throw new Error("Supabase service not connected for memory operations.");
-    return callBackendTool(\'memory_save\', { key, value, tags });
+    ensureValidatedService('supabase', 'Supabase');
+    return callBackendTool('memory_save', { key, value, tags });
 };
 
 const memory_retrieve = async (key?: string, tags?: string[]): Promise<string> => {
-    if (!checkAuth(\'supabase\')) throw new Error("Supabase service not connected for memory operations.");
+    ensureValidatedService('supabase', 'Supabase');
     if (!key && (!tags || tags.length === 0)) {
-        throw new Error("Must provide either a \'key\' or \'tags\' to retrieve memory.");
+        throw new Error("Must provide either a 'key' or 'tags' to retrieve memory.");
     }
-    return callBackendTool(\'memory_retrieve\', { key, tags });
+    return callBackendTool('memory_retrieve', { key, tags });
 };
 
 const memory_delete = async (key: string): Promise<string> => {
-    if (!checkAuth(\'supabase\')) throw new Error("Supabase service not connected for memory operations.");
-    return callBackendTool(\'memory_delete\', { key });
+    ensureValidatedService('supabase', 'Supabase');
+    return callBackendTool('memory_delete', { key });
 };
 
 const data_analyze = async (input_file_path: string, analysis_script: string): Promise<string> => {

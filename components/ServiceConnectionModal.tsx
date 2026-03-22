@@ -1,21 +1,30 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { CloseIcon } from './icons/CloseIcon';
-// FIX: Import Service from the central types file as it's used across the app.
 import { Service } from '../types';
+
+type ConnectionErrorType = 'invalid_key' | 'timeout' | 'provider_down' | null;
 
 interface ServiceConnectionModalProps {
     service: Service | null;
     isOpen: boolean;
     onClose: () => void;
-    onSave: (serviceId: string, values: { [key: string]: string }) => void;
+    onSave: (serviceId: string, values: { [key: string]: string }) => Promise<void>;
     onDisconnect: (serviceId: string) => void;
 }
+
+const connectionErrorMessages: Record<Exclude<ConnectionErrorType, null>, string> = {
+    invalid_key: 'The API key was rejected. Please verify your credential and try again.',
+    timeout: 'Validation timed out. Please retry in a moment.',
+    provider_down: 'The provider appears unavailable right now. Please try again later.',
+};
 
 export const ServiceConnectionModal: React.FC<ServiceConnectionModalProps> = ({ service, isOpen, onClose, onSave, onDisconnect }) => {
     const [formState, setFormState] = useState<{ [key: string]: string }>({});
     const [errors, setErrors] = useState<{ [key: string]: string | null }>({});
     const [touched, setTouched] = useState<{ [key: string]: boolean }>({});
+    const [isSaving, setIsSaving] = useState(false);
+    const [connectionError, setConnectionError] = useState<ConnectionErrorType>(null);
 
     useEffect(() => {
         if (service) {
@@ -26,6 +35,8 @@ export const ServiceConnectionModal: React.FC<ServiceConnectionModalProps> = ({ 
             setFormState(initialState);
             setErrors({});
             setTouched({});
+            setConnectionError(null);
+            setIsSaving(false);
         }
     }, [service]);
 
@@ -63,6 +74,7 @@ export const ServiceConnectionModal: React.FC<ServiceConnectionModalProps> = ({ 
 
     const handleInputChange = (id: string, value: string) => {
         setFormState(prev => ({ ...prev, [id]: value }));
+        setConnectionError(null);
         if (touched[id]) {
             setErrors(prev => ({ ...prev, [id]: validateInput(id, value) }));
         }
@@ -73,8 +85,8 @@ export const ServiceConnectionModal: React.FC<ServiceConnectionModalProps> = ({ 
         setErrors(prev => ({ ...prev, [id]: validateInput(id, formState[id] || '') }));
     };
 
-    const handleSave = () => {
-        if (isSaveDisabled) return;
+    const handleSave = async () => {
+        if (isSaveDisabled || !service) return;
 
         let hasErrors = false;
         const newErrors: { [key: string]: string | null } = {};
@@ -92,12 +104,25 @@ export const ServiceConnectionModal: React.FC<ServiceConnectionModalProps> = ({ 
         setErrors(newErrors);
         setTouched(newTouched);
 
-        if (!hasErrors) {
-            onSave(service.id, formState);
+        if (hasErrors) return;
+
+        try {
+            setIsSaving(true);
+            setConnectionError(null);
+            await onSave(service.id, formState);
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : '';
+            const normalizedError = (['invalid_key', 'timeout', 'provider_down'] as const).includes(errorMessage as any)
+                ? (errorMessage as Exclude<ConnectionErrorType, null>)
+                : 'provider_down';
+            setConnectionError(normalizedError);
+        } finally {
+            setIsSaving(false);
         }
     };
 
     const handleDisconnect = () => {
+        if (!service) return;
         onDisconnect(service.id);
     }
     
@@ -168,6 +193,10 @@ export const ServiceConnectionModal: React.FC<ServiceConnectionModalProps> = ({ 
                             ))}
                         </div>
 
+                        {connectionError && (
+                            <p className="mt-4 text-sm text-red-400">{connectionErrorMessages[connectionError]}</p>
+                        )}
+
                         <footer className="mt-8 flex justify-between items-center">
                              {service.status === 'Connected' ? (
                                 <button
@@ -179,10 +208,10 @@ export const ServiceConnectionModal: React.FC<ServiceConnectionModalProps> = ({ 
                             ) : <div></div>}
                             <button
                                 onClick={handleSave}
-                                disabled={isSaveDisabled}
+                                disabled={isSaveDisabled || isSaving}
                                 className="bg-[#8B5CF6] hover:bg-[#7c4ee3] text-white font-bold py-2 px-6 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                                {service.status === 'Connected' ? 'Save Changes' : 'Save Connection'}
+                                {isSaving ? 'Validating…' : service.status === 'Connected' ? 'Save Changes' : 'Save Connection'}
                             </button>
                         </footer>
                     </motion.div>
