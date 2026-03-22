@@ -74,6 +74,16 @@ ECHO runs entirely in your browser. To get started locally:
 
 4.  Open your browser to the local server address (e.g., `http://localhost:8000`).
 
+
+## 🧩 Backend Orchestration (`orchestrator.py`)
+
+`orchestrator.py` is the lightweight Python execution layer for backend tool calls. It is responsible for:
+
+- Executing named tool calls (`memory_save`, `memory_retrieve`, `memory_delete`, `data_analyze`, `data_visualize`) through a registry.
+- Persisting memory entries in a UTF-8 JSON store when running locally.
+- Running Python analysis/visualization scripts and returning structured execution results (stdout/stderr/return code).
+- Providing a CLI entrypoint (`python3 orchestrator.py --tool ...`) for local testing and CI automation.
+
 ## 🛠️ Technology Stack
 
 -   **Frontend:** React 19, TypeScript, TailwindCSS
