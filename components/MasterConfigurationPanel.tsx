@@ -14,7 +14,7 @@ import { SupabaseIcon } from './icons/SupabaseIcon';
 import { GenericApiIcon } from './icons/GenericApiIcon';
 import { AgentCreationModal } from './AgentCreationModal';
 // FIX: Added Service to the import from the central types file.
-import { CustomAgent, Playbook, AgentPreferences, AgentRole, TodoItem, Service, ModelProviderConfig } from '../types';
+import { CustomAgent, Playbook, AgentPreferences, AgentRole, TodoItem, Service, ModelProviderConfig, RoutingSettings, SessionBudgetSettings } from '../types';
 import { PencilIcon } from './icons/PencilIcon';
 import { TrashIcon } from './icons/TrashIcon';
 import { PlusIcon } from './icons/PlusIcon';
@@ -116,7 +116,11 @@ const initialModelProviders: ModelProviderConfig[] = [
     description: 'Primary high-speed, multi-modal model for core reasoning and tool use.',
     config: {
       model_name: 'gemini-2.5-flash',
-      api_key_env_var: 'GEMINI_API_KEY'
+      api_key_env_var: 'GEMINI_API_KEY',
+      input_cost_per_1m_tokens_usd: 0.35,
+      output_cost_per_1m_tokens_usd: 1.05,
+      avg_latency_ms: 900,
+      quality_score: 0.92,
     },
     integration_layer: 'NATIVE',
     enabled: true
@@ -128,7 +132,11 @@ const initialModelProviders: ModelProviderConfig[] = [
     description: 'Local Llama 3 8B model hosted via Ollama for code generation and internal critique.',
     config: {
       model_name: 'llama3:8b',
-      base_url: 'http://localhost:11434/api/generate'
+      base_url: 'http://localhost:11434/api/generate',
+      input_cost_per_1m_tokens_usd: 0,
+      output_cost_per_1m_tokens_usd: 0,
+      avg_latency_ms: 1300,
+      quality_score: 0.75,
     },
     integration_layer: 'LANGCHAIN',
     enabled: true
@@ -141,7 +149,11 @@ const initialModelProviders: ModelProviderConfig[] = [
     config: {
       model_name: 'mixtral-8x7b-instruct-v0.1',
       api_key_env_var: 'HF_API_KEY',
-      endpoint_url: 'https://api-inference.huggingface.co/models/...'
+      endpoint_url: 'https://api-inference.huggingface.co/models/...',
+      input_cost_per_1m_tokens_usd: 0.6,
+      output_cost_per_1m_tokens_usd: 0.6,
+      avg_latency_ms: 1800,
+      quality_score: 0.88,
     },
     integration_layer: 'LANGCHAIN',
     enabled: false
@@ -251,6 +263,20 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
         } catch (e) { console.error(e); }
         return initialModelProviders;
     });
+    const [routingSettings, setRoutingSettings] = useState<RoutingSettings>(() => {
+        try {
+            const saved = localStorage.getItem('echo-routing-settings');
+            if (saved) return JSON.parse(saved);
+        } catch (e) { console.error(e); }
+        return { policy: 'HYBRID', hybridWeights: { cost: 0.4, latency: 0.3, quality: 0.3 } };
+    });
+    const [sessionBudgetSettings, setSessionBudgetSettings] = useState<SessionBudgetSettings>(() => {
+        try {
+            const saved = localStorage.getItem('echo-session-budget-settings');
+            if (saved) return JSON.parse(saved);
+        } catch (e) { console.error(e); }
+        return { enabled: false, capUsd: 5, alertThresholdPercent: 80 };
+    });
     
     const [agents, setAgents] = useState<CustomAgent[]>(() => {
         let savedAgents: CustomAgent[] = [];
@@ -350,6 +376,18 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
             localStorage.setItem('echo-model-providers', JSON.stringify(modelProviders));
         } catch (e) { console.error(e); }
     }, [modelProviders]);
+
+    useEffect(() => {
+        try {
+            localStorage.setItem('echo-routing-settings', JSON.stringify(routingSettings));
+        } catch (e) { console.error(e); }
+    }, [routingSettings]);
+
+    useEffect(() => {
+        try {
+            localStorage.setItem('echo-session-budget-settings', JSON.stringify(sessionBudgetSettings));
+        } catch (e) { console.error(e); }
+    }, [sessionBudgetSettings]);
 
     const availableAgentNames = useMemo(() => {
         const customAgentNames = agents.filter(a => !a.isCore).map(a => a.name);
@@ -702,6 +740,9 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
                                                 <div className="flex-grow overflow-hidden">
                                                     <p className="font-semibold text-zinc-800 dark:text-white truncate" title={provider.config.model_name}>{provider.config.model_name}</p>
                                                     <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{provider.description}</p>
+                                                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                                        ${provider.config.input_cost_per_1m_tokens_usd ?? 0}/1M in · ${provider.config.output_cost_per_1m_tokens_usd ?? 0}/1M out · {provider.config.avg_latency_ms ?? 'n/a'}ms · Q{provider.config.quality_score ?? 'n/a'}
+                                                    </p>
                                                     <div className="flex items-center gap-2 mt-2">
                                                         <span className={`px-2 py-0.5 rounded-full text-xs font-mono ${provider.type === 'CLOUD' ? 'bg-sky-500/20 text-sky-400' : 'bg-green-500/20 text-green-400'}`}>{provider.type}</span>
                                                         <span className={`px-2 py-0.5 rounded-full text-xs font-mono ${provider.integration_layer === 'NATIVE' ? 'bg-purple-500/20 text-purple-400' : 'bg-orange-500/20 text-orange-400'}`}>{provider.integration_layer}</span>
@@ -731,6 +772,37 @@ export const MasterConfigurationPanel: React.FC<MasterConfigurationPanelProps> =
                                 <PlusIcon className="w-5 h-5" />
                                 Add New Provider
                             </button>
+
+                            <div className="mt-4 border-t border-black/10 dark:border-white/10 pt-4 space-y-3">
+                                <h4 className="text-sm font-semibold text-zinc-700 dark:text-gray-300">Routing Policy</h4>
+                                <select
+                                    value={routingSettings.policy}
+                                    onChange={(e) => setRoutingSettings(prev => ({ ...prev, policy: e.target.value as RoutingSettings['policy'] }))}
+                                    className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg px-3 py-2 text-sm"
+                                >
+                                    <option value="CHEAPEST_FIRST">Cheapest First</option>
+                                    <option value="LATENCY_FIRST">Latency First</option>
+                                    <option value="QUALITY_FIRST">Quality First</option>
+                                    <option value="HYBRID">Hybrid</option>
+                                </select>
+                            </div>
+                        </Section>
+
+                        <Section title="Session Budget Guardrails" icon={<ClipboardCheckIcon className="w-5 h-5" />}>
+                            <div className="space-y-3">
+                                <label className="flex items-center justify-between text-sm">
+                                    <span>Enable Budget Cap</span>
+                                    <input type="checkbox" checked={sessionBudgetSettings.enabled} onChange={(e) => setSessionBudgetSettings(prev => ({ ...prev, enabled: e.target.checked }))} />
+                                </label>
+                                <div>
+                                    <label className="text-xs text-gray-500">Cap (USD)</label>
+                                    <input type="number" min="0" step="0.1" value={sessionBudgetSettings.capUsd} onChange={(e) => setSessionBudgetSettings(prev => ({ ...prev, capUsd: Number(e.target.value) }))} className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg px-3 py-2 text-sm" />
+                                </div>
+                                <div>
+                                    <label className="text-xs text-gray-500">Alert Threshold (%)</label>
+                                    <input type="number" min="1" max="100" value={sessionBudgetSettings.alertThresholdPercent} onChange={(e) => setSessionBudgetSettings(prev => ({ ...prev, alertThresholdPercent: Number(e.target.value) }))} className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg px-3 py-2 text-sm" />
+                                </div>
+                            </div>
                         </Section>
                         
                         {Object.entries(categorizedServices).map(([category, serviceList]) => serviceList.length > 0 && (

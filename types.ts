@@ -7,6 +7,7 @@ export enum AgentMode {
 
 export interface SessionStats {
     totalTokensUsed: number;
+    estimatedCostUsd?: number;
 }
 
 export interface Message {
@@ -167,7 +168,30 @@ export interface ModelProviderConfig {
     api_key_env_var?: string;
     base_url?: string;
     endpoint_url?: string;
+    input_cost_per_1m_tokens_usd?: number;
+    output_cost_per_1m_tokens_usd?: number;
+    avg_latency_ms?: number;
+    quality_score?: number;
   };
   integration_layer: 'NATIVE' | 'LANGCHAIN';
   enabled: boolean;
 }
+
+export type RoutingPolicy = 'CHEAPEST_FIRST' | 'LATENCY_FIRST' | 'QUALITY_FIRST' | 'HYBRID';
+
+export interface RoutingSettings {
+    policy: RoutingPolicy;
+    hybridWeights?: {
+        cost: number;
+        latency: number;
+        quality: number;
+    };
+}
+
+export interface SessionBudgetSettings {
+    enabled: boolean;
+    capUsd: number;
+    alertThresholdPercent: number;
+}
+
+export type FallbackFailureReason = 'timeout' | 'auth' | 'quota' | 'malformed_output' | 'unknown';

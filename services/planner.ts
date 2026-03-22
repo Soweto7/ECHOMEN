@@ -1,6 +1,7 @@
-import { GoogleGenAI, FunctionDeclaration, Type, Chat, GenerateContentResponse } from "@google/genai";
-import type { Task, AgentRole, ToolCall, AgentPreferences, TodoItem, SubStep, Playbook, CustomAgent, Artifact } from '../types';
+import { GoogleGenAI, FunctionDeclaration, Type, GenerateContentResponse } from "@google/genai";
+import type { Task, AgentRole, ToolCall, AgentPreferences, TodoItem, SubStep, Playbook, CustomAgent, Artifact, ModelProviderConfig, RoutingSettings } from '../types';
 import { availableTools, toolDeclarations } from './tools';
+import { classifyProviderFailure, selectProviderWithPolicy } from './modelRouting';
 
 const structuredPlanSchema = {
     type: Type.ARRAY,
@@ -36,7 +37,7 @@ const actionAnalysisSchema = {
 };
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-let chat: Chat | null = null;
+type RoutingLogCallback = (message: string) => void;
 
 const WELCOME_TRIGGERS = ['what can you do', 'help', 'explain yourself', 'what is this', 'hello', 'hi', 'what are you', 'who are you'];
 
@@ -82,22 +83,69 @@ const handleApiResponse = (response: GenerateContentResponse, onTokenUpdate: (co
     return response.text;
 }
 
-export const analyzeChatMessageForAction = async (prompt: string, onTokenUpdate: (count: number) => void): Promise<{ is_actionable: boolean; suggested_prompt: string }> => {
+const loadRoutingContext = (): { providers: ModelProviderConfig[]; settings: RoutingSettings } => {
+    let providers: ModelProviderConfig[] = [];
+    let settings: RoutingSettings = { policy: 'HYBRID', hybridWeights: { cost: 0.4, latency: 0.3, quality: 0.3 } };
+
+    try {
+        providers = JSON.parse(localStorage.getItem('echo-model-providers') || '[]') as ModelProviderConfig[];
+        const parsedSettings = JSON.parse(localStorage.getItem('echo-routing-settings') || 'null') as RoutingSettings | null;
+        if (parsedSettings?.policy) {
+            settings = parsedSettings;
+        }
+    } catch (error) {
+        console.error('Failed to parse routing context', error);
+    }
+    return { providers, settings };
+};
+
+const routedGenerateContent = async (
+    stepName: string,
+    preferredModelName: string,
+    requestBuilder: (modelName: string) => Parameters<typeof ai.models.generateContent>[0],
+    onRouteLog?: RoutingLogCallback
+): Promise<{ response: GenerateContentResponse; providerUsed: ModelProviderConfig | null }> => {
+    const { providers, settings } = loadRoutingContext();
+    const selection = selectProviderWithPolicy(providers, settings, preferredModelName);
+
+    const models = selection
+        ? [selection.primary, ...selection.fallbackChain]
+        : [{ id: 'default-gemini', provider: 'GEMINI', type: 'CLOUD', description: 'Default fallback model', config: { model_name: preferredModelName }, integration_layer: 'NATIVE', enabled: true } as ModelProviderConfig];
+
+    let lastError: unknown = null;
+    for (let i = 0; i < models.length; i += 1) {
+        const provider = models[i];
+        try {
+            onRouteLog?.(`[Routing:${stepName}] Attempt ${i + 1}/${models.length} -> ${provider.provider}:${provider.config.model_name}`);
+            const response = await ai.models.generateContent(requestBuilder(provider.config.model_name));
+            onRouteLog?.(`[Routing:${stepName}] Selected provider ${provider.provider}:${provider.config.model_name}`);
+            return { response, providerUsed: provider };
+        } catch (error) {
+            lastError = error;
+            const reason = classifyProviderFailure(error);
+            onRouteLog?.(`[Routing:${stepName}] Provider ${provider.provider}:${provider.config.model_name} failed (${reason}).`);
+        }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error(`All routed providers failed for ${stepName}.`);
+};
+
+export const analyzeChatMessageForAction = async (prompt: string, onTokenUpdate: (count: number) => void, onRouteLog?: RoutingLogCallback): Promise<{ is_actionable: boolean; suggested_prompt: string }> => {
     const systemInstruction = `You are an intent-recognition AI. Your task is to analyze a user's chat message and determine if it contains an actionable command (e.g., "build this", "create a file", "run this command", "can you write a script for...") versus a conversational query (e.g., "how does this work?", "what is...", "explain...").
 - If it's an actionable command, set 'is_actionable' to true and rephrase the command into a clear, concise prompt for another AI agent.
 - If it's conversational, set 'is_actionable' to false.
 Your response MUST be a valid JSON object adhering to the provided schema.`;
 
     try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
+        const { response } = await routedGenerateContent('analyze_chat_message', 'gemini-2.5-flash', (modelName) => ({
+            model: modelName,
             contents: prompt,
             config: {
                 responseMimeType: "application/json",
                 responseSchema: actionAnalysisSchema,
                 systemInstruction: systemInstruction,
             },
-        });
+        }), onRouteLog);
         const resultJson = handleApiResponse(response, onTokenUpdate).trim();
         const result = JSON.parse(resultJson);
         return result;
@@ -107,7 +155,7 @@ Your response MUST be a valid JSON object adhering to the provided schema.`;
     }
 };
 
-export const clarifyAndCorrectPrompt = async (prompt: string, onTokenUpdate: (count: number) => void): Promise<string> => {
+export const clarifyAndCorrectPrompt = async (prompt: string, onTokenUpdate: (count: number) => void, onRouteLog?: RoutingLogCallback): Promise<string> => {
     const systemInstruction = `You are an AI assistant that refines user prompts. Your goal is to correct any spelling or grammar mistakes, clarify ambiguities, and rephrase the prompt into a clear, actionable command for another AI agent. Do not add any conversational fluff. Only return the refined prompt. If the prompt is already clear and well-defined, return it as-is.
 
 Example 1:
@@ -119,14 +167,14 @@ User: "make a new react component called header"
 Assistant: "Create a new React component named 'Header'. It should have a default export and a basic JSX structure."
 `;
     try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
+        const { response } = await routedGenerateContent('clarify_prompt', 'gemini-2.5-flash', (modelName) => ({
+            model: modelName,
             contents: prompt,
             config: {
                 systemInstruction: systemInstruction,
-                temperature: 0.2, // Be conservative with changes
+                temperature: 0.2,
             },
-        });
+        }), onRouteLog);
         return handleApiResponse(response, onTokenUpdate).trim();
     } catch (error) {
         console.error("Error clarifying prompt:", error);
@@ -148,7 +196,7 @@ const getAgentNameForRole = (role: AgentRole, preferences: AgentPreferences): st
     }
 }
 
-const findRelevantPlaybook = async (prompt: string, playbooks: Playbook[], onTokenUpdate: (count: number) => void): Promise<Playbook | null> => {
+const findRelevantPlaybook = async (prompt: string, playbooks: Playbook[], onTokenUpdate: (count: number) => void, onRouteLog?: RoutingLogCallback): Promise<Playbook | null> => {
     if (playbooks.length === 0) return null;
 
     const playbookDescriptions = playbooks.map(p => `ID: ${p.id}, Description: ${p.triggerPrompt}`).join('\n');
@@ -166,10 +214,10 @@ ${playbookDescriptions}
 `;
     
     try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
+        const { response } = await routedGenerateContent('find_relevant_playbook', 'gemini-2.5-flash', (modelName) => ({
+            model: modelName,
             contents: recallPrompt,
-        });
+        }), onRouteLog);
 
         const bestId = handleApiResponse(response, onTokenUpdate).trim();
         if (bestId && bestId !== 'NONE') {
@@ -214,7 +262,8 @@ export const createInitialPlan = async (
     prompt: string,
     isWebToolActive: boolean,
     context: ExecutionContext,
-    onTokenUpdate: (count: number) => void
+    onTokenUpdate: (count: number) => void,
+    onRouteLog?: RoutingLogCallback
 ): Promise<Task[]> => {
     let agentPreferences: AgentPreferences = {};
 
@@ -226,7 +275,7 @@ export const createInitialPlan = async (
     }
 
     if (!isWebToolActive) {
-        const relevantPlaybook = await findRelevantPlaybook(prompt, context.playbooks, onTokenUpdate);
+        const relevantPlaybook = await findRelevantPlaybook(prompt, context.playbooks, onTokenUpdate, onRouteLog);
         if (relevantPlaybook) {
             console.log(`Found relevant playbook: ${relevantPlaybook.name}`);
             return rehydrateTasksFromPlaybook(relevantPlaybook, agentPreferences);
@@ -252,15 +301,15 @@ This context is for your awareness. Use it to create a more effective and inform
     }
 
     try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
+        const { response } = await routedGenerateContent('create_initial_plan', 'gemini-2.5-flash', (modelName) => ({
+            model: modelName,
             contents: prompt,
             config: {
                 responseMimeType: "application/json",
                 responseSchema: structuredPlanSchema,
                 systemInstruction: systemInstruction,
             },
-        });
+        }), onRouteLog);
         
         const textResponse = handleApiResponse(response, onTokenUpdate);
 
@@ -320,7 +369,7 @@ This context is for your awareness. Use it to create a more effective and inform
 };
 
 
-export const determineNextStep = async (task: Task, subSteps: SubStep[], currentArtifacts: Artifact[], onTokenUpdate: (count: number) => void): Promise<{ thought: string; toolCall: ToolCall } | { isFinished: true; finalThought: string }> => {
+export const determineNextStep = async (task: Task, subSteps: SubStep[], currentArtifacts: Artifact[], onTokenUpdate: (count: number) => void, onRouteLog?: RoutingLogCallback): Promise<{ thought: string; toolCall: ToolCall } | { isFinished: true; finalThought: string }> => {
     const history = subSteps.map(step => 
         `Thought: ${step.thought}\nAction: ${JSON.stringify(step.toolCall)}\nObservation: ${step.observation}`
     ).join('\n\n');
@@ -350,14 +399,14 @@ ${history || "No actions taken yet."}
 What is your next action?
 `;
 
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+    const { response } = await routedGenerateContent('determine_next_step', 'gemini-2.5-flash', (modelName) => ({
+        model: modelName,
         contents: prompt,
         config: {
             responseMimeType: "application/json",
             systemInstruction: "You are a methodical AI agent executor. Follow the ReAct (Reason-Act) pattern. Your response must be a single, valid JSON object representing your next thought and action, or a finalization signal.",
         },
-    });
+    }), onRouteLog);
     
     const resultJson = handleApiResponse(response, onTokenUpdate).trim();
 
@@ -380,23 +429,21 @@ What is your next action?
     }
 };
 
-export const getChatResponse = async (prompt: string, onTokenUpdate: (count: number) => void): Promise<string> => {
+export const getChatResponse = async (prompt: string, onTokenUpdate: (count: number) => void, onRouteLog?: RoutingLogCallback): Promise<string> => {
     // Check for welcome triggers
     const lowerCasePrompt = prompt.toLowerCase().trim().replace(/[.,?_]/g, "");
     if (WELCOME_TRIGGERS.some(trigger => lowerCasePrompt.includes(trigger))) {
         return ECHO_EXPLANATION;
     }
 
-    if (!chat) {
-        chat = ai.chats.create({
-            model: 'gemini-2.5-flash',
+    try {
+        const { response } = await routedGenerateContent('chat_response', 'gemini-2.5-flash', (modelName) => ({
+            model: modelName,
+            contents: prompt,
             config: {
                 systemInstruction: 'You are ECHO, a helpful AI assistant. You are direct, efficient, and concise in your responses.',
             },
-        });
-    }
-    try {
-        const response = await chat.sendMessage({ message: prompt });
+        }), onRouteLog);
         return handleApiResponse(response, onTokenUpdate);
     } catch (error) {
         console.error("Error getting chat response:", error);
@@ -408,7 +455,7 @@ export const getChatResponse = async (prompt: string, onTokenUpdate: (count: num
 };
 
 
-export const suggestPlaybookName = async (prompt: string, tasks: Task[], onTokenUpdate: (count: number) => void): Promise<string> => {
+export const suggestPlaybookName = async (prompt: string, tasks: Task[], onTokenUpdate: (count: number) => void, onRouteLog?: RoutingLogCallback): Promise<string> => {
     const taskSummary = tasks.map((t, i) => `${i + 1}. [${t.agent.role}] ${t.title}`).join('\n');
     
     const summarizationPrompt = `
@@ -421,10 +468,10 @@ Based on the original prompt and the successful plan, create a short, descriptiv
 `;
 
     try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
+        const { response } = await routedGenerateContent('suggest_playbook_name', 'gemini-2.5-flash', (modelName) => ({
+            model: modelName,
             contents: summarizationPrompt,
-        });
+        }), onRouteLog);
 
         return handleApiResponse(response, onTokenUpdate).trim().replace(/"/g, '');
     } catch (error) {
