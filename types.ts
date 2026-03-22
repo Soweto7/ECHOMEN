@@ -171,3 +171,30 @@ export interface ModelProviderConfig {
   integration_layer: 'NATIVE' | 'LANGCHAIN';
   enabled: boolean;
 }
+
+export type McpAuthType = 'none' | 'bearer' | 'header';
+export type McpServerStatus = 'connected' | 'disconnected' | 'degraded' | 'unknown';
+
+export interface McpServerAuth {
+    type: McpAuthType;
+    token?: string;
+    headerName?: string;
+}
+
+export interface McpServer {
+    id: string;
+    name: string;
+    url: string;
+    auth: McpServerAuth;
+    timeoutMs: number;
+    retryCount: number;
+    status: McpServerStatus;
+    capabilities: string[];
+    lastCheckedAt?: string;
+}
+
+export interface McpToolDefinition {
+    name: string;
+    description?: string;
+    inputSchema?: Record<string, any>;
+}

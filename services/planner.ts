@@ -1,6 +1,6 @@
 import { GoogleGenAI, FunctionDeclaration, Type, Chat, GenerateContentResponse } from "@google/genai";
 import type { Task, AgentRole, ToolCall, AgentPreferences, TodoItem, SubStep, Playbook, CustomAgent, Artifact } from '../types';
-import { availableTools, toolDeclarations } from './tools';
+import { availableTools, refreshMcpToolRegistry, toolDeclarations } from './tools';
 
 const structuredPlanSchema = {
     type: Type.ARRAY,
@@ -321,6 +321,8 @@ This context is for your awareness. Use it to create a more effective and inform
 
 
 export const determineNextStep = async (task: Task, subSteps: SubStep[], currentArtifacts: Artifact[], onTokenUpdate: (count: number) => void): Promise<{ thought: string; toolCall: ToolCall } | { isFinished: true; finalThought: string }> => {
+    await refreshMcpToolRegistry();
+
     const history = subSteps.map(step => 
         `Thought: ${step.thought}\nAction: ${JSON.stringify(step.toolCall)}\nObservation: ${step.observation}`
     ).join('\n\n');

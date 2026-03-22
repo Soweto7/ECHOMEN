@@ -1,5 +1,7 @@
 import { FunctionDeclaration, Type } from "@google/genai";
 import { Service } from '../types';
+import { McpServer } from '../types';
+import { createMcpFunctionDeclaration, executeMcpTool, getMcpServers, listToolsForServer } from './mcpClient';
 
 const BACKEND_URL = 'http://localhost:3001/execute-tool';
 
@@ -157,21 +159,21 @@ const github_create_file_in_repo = async (repo_name: string, path: string, conte
 // --- Memory Tools (Supabase Integration) ---
 
 const memory_save = async (key: string, value: string, tags: string[]): Promise<string> => {
-    if (!checkAuth(\'supabase\')) throw new Error("Supabase service not connected for memory operations.");
-    return callBackendTool(\'memory_save\', { key, value, tags });
+    if (!checkAuth('supabase')) throw new Error("Supabase service not connected for memory operations.");
+    return callBackendTool('memory_save', { key, value, tags });
 };
 
 const memory_retrieve = async (key?: string, tags?: string[]): Promise<string> => {
-    if (!checkAuth(\'supabase\')) throw new Error("Supabase service not connected for memory operations.");
+    if (!checkAuth('supabase')) throw new Error("Supabase service not connected for memory operations.");
     if (!key && (!tags || tags.length === 0)) {
-        throw new Error("Must provide either a \'key\' or \'tags\' to retrieve memory.");
+        throw new Error("Must provide either a 'key' or 'tags' to retrieve memory.");
     }
-    return callBackendTool(\'memory_retrieve\', { key, tags });
+    return callBackendTool('memory_retrieve', { key, tags });
 };
 
 const memory_delete = async (key: string): Promise<string> => {
-    if (!checkAuth(\'supabase\')) throw new Error("Supabase service not connected for memory operations.");
-    return callBackendTool(\'memory_delete\', { key });
+    if (!checkAuth('supabase')) throw new Error("Supabase service not connected for memory operations.");
+    return callBackendTool('memory_delete', { key });
 };
 
 const data_analyze = async (input_file_path: string, analysis_script: string): Promise<string> => {
@@ -214,7 +216,7 @@ const create_and_delegate_task_to_new_agent = async (agent_name: string, agent_i
 
 // --- Tool Definitions and Declarations ---
 
-export const toolDeclarations: FunctionDeclaration[] = [
+const baseToolDeclarations: FunctionDeclaration[] = [
     {
         name: 'readFile',
         description: 'Reads the entire content of a specified file from the connected sandbox environment (Daytona or CodeSandbox).',
@@ -399,7 +401,7 @@ export const toolDeclarations: FunctionDeclaration[] = [
     }
 ];
 
-export const availableTools: { [key: string]: (...args: any[]) => Promise<any> } = {
+const baseAvailableTools: { [key: string]: (...args: any[]) => Promise<any> } = {
     readFile: (args: { path: string }) => readFile(args.path),
     writeFile: (args: { path: string; content: string }) => writeFile(args.path, args.content),
     listFiles: (args: { path: string }) => listFiles(args.path),
@@ -420,3 +422,44 @@ export const availableTools: { [key: string]: (...args: any[]) => Promise<any> }
     create_and_delegate_task_to_new_agent: (args: { agent_name: string, agent_instructions: string, task_description: string, agent_icon: string }) => create_and_delegate_task_to_new_agent(args.agent_name, args.agent_instructions, args.task_description, args.agent_icon),
     askUser: (args: { question: string }) => askUser(args.question),
 };
+
+const MCP_TOOL_PREFIX = 'mcp__';
+
+export let toolDeclarations: FunctionDeclaration[] = [...baseToolDeclarations];
+export let availableTools: { [key: string]: (...args: any[]) => Promise<any> } = { ...baseAvailableTools };
+
+const buildMcpTools = async () => {
+    const declarations: FunctionDeclaration[] = [];
+    const implementations: { [key: string]: (...args: any[]) => Promise<any> } = {};
+    const servers: McpServer[] = getMcpServers().filter(server => server.status !== 'disconnected');
+
+    for (const server of servers) {
+        try {
+            const tools = await listToolsForServer(server);
+            tools.forEach(tool => {
+                const declaration = createMcpFunctionDeclaration(server, tool);
+                declarations.push(declaration);
+                implementations[declaration.name] = (args: Record<string, unknown>) => executeMcpTool(server, tool.name, args);
+            });
+        } catch (error) {
+            console.warn(`Failed to load MCP tools for server ${server.name}`, error);
+        }
+    }
+
+    return { declarations, implementations };
+};
+
+export const refreshMcpToolRegistry = async () => {
+    const { declarations, implementations } = await buildMcpTools();
+    toolDeclarations = [...baseToolDeclarations, ...declarations];
+
+    const staticEntries = Object.entries(baseAvailableTools);
+    const mcpEntries = Object.entries(implementations);
+    availableTools = Object.fromEntries([...staticEntries, ...mcpEntries]);
+};
+
+export const isMcpToolName = (toolName: string) => toolName.startsWith(MCP_TOOL_PREFIX);
+
+refreshMcpToolRegistry().catch(error => {
+    console.warn('Unable to initialize MCP tools on startup', error);
+});

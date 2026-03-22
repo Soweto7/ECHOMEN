@@ -1,6 +1,6 @@
 import { Task, LogEntry, SubStep, ToolCall, Artifact, CustomAgent } from '../types';
 import { determineNextStep } from './planner';
-import { availableTools } from './tools';
+import { availableTools, isMcpToolName } from './tools';
 
 const MAX_SUB_STEPS = 10;
 
@@ -341,13 +341,23 @@ export class AgentExecutor {
 
                 if (toolImplementation) {
                     try {
+                        const start = Date.now();
                         this.callbacks.onLog({ status: 'INFO', message: `[${task.agent.name}] Using tool: ${toolCall.name} with args: ${JSON.stringify(toolCall.args)}` });
+                        if (isMcpToolName(toolCall.name)) {
+                            this.callbacks.onLog({ status: 'INFO', message: `[Trace][MCP] Calling ${toolCall.name}...` });
+                        }
                         const result = await toolImplementation(toolCall.args);
+                        if (isMcpToolName(toolCall.name)) {
+                            this.callbacks.onLog({ status: 'INFO', message: `[Trace][MCP] ${toolCall.name} completed in ${Date.now() - start}ms.` });
+                        }
                         observation = typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result);
                         this.callbacks.onLog({ status: 'SUCCESS', message: `[Tool] ${toolCall.name} returned: ${observation.substring(0, 100)}...` });
                     } catch (e) {
                         const toolError = e instanceof Error ? e.message : String(e);
                         observation = `Error executing tool ${toolCall.name}: ${toolError}`;
+                        if (isMcpToolName(toolCall.name)) {
+                            this.callbacks.onLog({ status: 'ERROR', message: `[Trace][MCP] ${toolCall.name} failed: ${toolError}` });
+                        }
                         this.callbacks.onLog({ status: 'ERROR', message: `[Tool] ${observation}` });
                         throw new Error(observation);
                     }
