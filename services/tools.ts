@@ -1,7 +1,9 @@
 import { FunctionDeclaration, Type } from "@google/genai";
 import { Service } from '../types';
 
-const BACKEND_URL = 'http://localhost:3001/execute-tool';
+const rawBackendUrl = import.meta.env.VITE_TOOL_BACKEND_URL || 'http://localhost:3001';
+const backendBaseUrl = rawBackendUrl.replace(/\/$/, '');
+const BACKEND_URL = `${backendBaseUrl}/execute-tool`;
 
 // --- Helper Functions ---
 
@@ -32,7 +34,9 @@ const callBackendTool = async (toolName: string, args: object): Promise<any> => 
     } catch (error) {
         console.error(`Error calling backend for tool '${toolName}':`, error);
         if (error instanceof Error) {
-            throw new Error(`Failed to execute '${toolName}': ${error.message}. Is the ECHO Execution Engine running?`);
+            throw new Error(
+                `Failed to execute '${toolName}': ${error.message}. Ensure your tool backend is running at ${BACKEND_URL}.`
+            );
         }
         throw new Error(`An unknown error occurred while executing '${toolName}'.`);
     }
