@@ -1,0 +1,26 @@
+[
+  {
+    "configId": "openai-direct",
+    "totalTasks": 6,
+    "taskCompletionRate": 100,
+    "retriesPerTask": 0,
+    "hallucinationIncidents": 0,
+    "latencyAvgMs": 658
+  },
+  {
+    "configId": "anthropic-router-a",
+    "totalTasks": 6,
+    "taskCompletionRate": 100,
+    "retriesPerTask": 0,
+    "hallucinationIncidents": 0,
+    "latencyAvgMs": 930
+  },
+  {
+    "configId": "google-router-b",
+    "totalTasks": 6,
+    "taskCompletionRate": 100,
+    "retriesPerTask": 0,
+    "hallucinationIncidents": 0,
+    "latencyAvgMs": 954
+  }
+]

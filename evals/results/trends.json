@@ -1,0 +1,56 @@
+{
+  "openai-direct": [
+    {
+      "runId": "eval-1771602307484",
+      "timestamp": "2026-02-20T15:45:07.484Z",
+      "taskCompletionRate": 100,
+      "retriesPerTask": 0,
+      "hallucinationIncidents": 0,
+      "latencyAvgMs": 658
+    },
+    {
+      "runId": "eval-1771602310152",
+      "timestamp": "2026-02-20T15:45:10.152Z",
+      "taskCompletionRate": 100,
+      "retriesPerTask": 0,
+      "hallucinationIncidents": 0,
+      "latencyAvgMs": 658
+    }
+  ],
+  "anthropic-router-a": [
+    {
+      "runId": "eval-1771602307484",
+      "timestamp": "2026-02-20T15:45:07.484Z",
+      "taskCompletionRate": 100,
+      "retriesPerTask": 0,
+      "hallucinationIncidents": 0,
+      "latencyAvgMs": 930
+    },
+    {
+      "runId": "eval-1771602310152",
+      "timestamp": "2026-02-20T15:45:10.152Z",
+      "taskCompletionRate": 100,
+      "retriesPerTask": 0,
+      "hallucinationIncidents": 0,
+      "latencyAvgMs": 930
+    }
+  ],
+  "google-router-b": [
+    {
+      "runId": "eval-1771602307484",
+      "timestamp": "2026-02-20T15:45:07.484Z",
+      "taskCompletionRate": 100,
+      "retriesPerTask": 0,
+      "hallucinationIncidents": 0,
+      "latencyAvgMs": 954
+    },
+    {
+      "runId": "eval-1771602310152",
+      "timestamp": "2026-02-20T15:45:10.152Z",
+      "taskCompletionRate": 100,
+      "retriesPerTask": 0,
+      "hallucinationIncidents": 0,
+      "latencyAvgMs": 954
+    }
+  ]
+}

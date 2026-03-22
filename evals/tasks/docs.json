@@ -1,0 +1,16 @@
+[
+  {
+    "id": "docs-release-001",
+    "category": "docs",
+    "prompt": "Draft release notes from a changelog and highlight breaking changes with migration guidance.",
+    "mustInclude": ["release notes", "migration"],
+    "hallucinationTriggers": ["CVE-0000-0000"]
+  },
+  {
+    "id": "docs-runbook-002",
+    "category": "docs",
+    "prompt": "Create an incident runbook section for API latency spikes, including escalation and rollback criteria.",
+    "mustInclude": ["incident", "rollback"],
+    "hallucinationTriggers": ["quantum datastore"]
+  }
+]
